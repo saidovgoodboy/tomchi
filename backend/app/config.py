@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     port: int = 8000
     bonus_amount: int = 20000
     bonus_per_press: int = 5000
+    storage_dir: Path = Path(__file__).resolve().parents[1] / "storage"
+    image_retention_days: int = 30
+    image_storage_max_bytes: int = 536870912
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

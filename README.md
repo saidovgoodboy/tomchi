@@ -16,7 +16,7 @@ Tomchi — avtomoyka uchun bonus tizimi. Backend bir nechta boxni boshqaradi: av
 ```bash
 cd /home/saidov/tomchi
 export PYTHONPATH=/home/saidov/tomchi/backend
-python3 -m pip install --user --upgrade fastapi uvicorn[standard] sqlalchemy pydantic pydantic-settings python-dotenv httpx
+python3 -m pip install --user -r backend/requirements.txt
 ```
 
 ### 2) Backend ishga tushirish
@@ -44,8 +44,10 @@ Open: http://localhost:5173
 - Admin panelning Bonus bo'limida box qo'shing. Box ID'sini (`box-1`, `box-2`...) shu boxdagi ESP32-CAM va panel ESP32 firmware'ida bir xil qilib sozlang.
 - Server manzili, Wi-Fi va device key'ni kiriting; har boxdagi ikkala ESP32 bitta backend serverga ulanadi.
 - Ulanish va apparat ogohlantirishlari uchun `INSTRUKTSIYA.md` ga qarang.
-- Camera firmware hozircha rasm/OCR ishlatmaydi, mock davlat raqami yuboradi; haqiqiy ANPR/OCR keyingi bosqich.
-- Panel firmware matnni Serial Monitor'ga chiqaradi; P10 panel drayveri hali ulanmagan.
+- Camera firmware PIR trigger bilan JPEG frame'larni serverga yuboradi; ANPR/OCR hali ulanmagan.
+- Admin panelning Cameras bo'limida boxlar live ko'rinadi; aniqlangan mashina suratlari bilan keladi va raqamni tekshirib/tuzatib visit yaratish mumkin.
+- Panel ESP32 HUB75 P10 matnini ko'rsatadi va tugmani o'qiydi; fizik bonus impulslari ataylab o'chirilgan.
+- `PULSE_PERIOD_MS` sozlamasida bill acceptor pulse-frequency qiymatini 50, 100 yoki 200 ms qilib tanlash mumkin (default 100 ms). Impuls kengligi/polarligi sinovdan o'tmaguncha `ENABLE_BONUS_REDEMPTION` o'chirilgan qoladi.
 
 ### 5) Demo device key
 
@@ -58,6 +60,7 @@ TOMCHI_DEMO_KEY
 - `GET /health`
 - `GET /api/stats`
 - `GET /api/visits`
+- `PUT /api/visits/{id}/plate`
 - `GET /api/cars`
 - `POST /api/detect`
 - `GET /api/display`
@@ -65,8 +68,13 @@ TOMCHI_DEMO_KEY
 - `POST /api/boxes`
 - `POST /api/bonus/press`
 - `POST /api/detect-image`
+- `POST /api/boxes/{box_id}/live-frame` va `GET /api/boxes/{box_id}/live-frame`
+- `GET /api/detections`, `GET /api/detections/{id}/image`, `PUT /api/detections/{id}/plate`
 
 Box qurilmalari so'rovda `X-Box-Id` header yuboradi. Bonus sozlamalari, boxlar, mashinalar va kelishlar SQLite'da saqlanadi. DB fayli: `backend/database/tomchi.db`; uni muntazam zaxiralang.
+
+Arxiv rasmlari SQLite BLOB emas, `backend/storage/detections/` ichida JPEG ko'rinishida saqlanadi (maksimal 640x480, qayta siqilgan). Rasmlar 30 kundan keyin yoki arxiv 512 MiB chegarasiga yetganda eng eskisidan o'chiriladi. Live preview har box uchun bitta kichik JPEG faylni yangilab boradi. ANPR/OCR modeli ulanmagan: Cameras sahifasida pending surat uchun davlat raqamini kiritish/tuzatish va visitni ro'yxatga olish kerak.
+Visits sahifasida raqamni tahrirlash faqat tanlangan kelishga ta'sir qiladi; Cars ro'yxatidagi mashina raqami va boshqa kelishlar o'zgarmaydi.
 
 ## Xavfsizlik va kalit
 

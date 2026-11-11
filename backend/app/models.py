@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -24,6 +24,7 @@ class WashBox(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     visits = relationship("Visit", back_populates="box")
+    detections = relationship("DetectionRecord", back_populates="box")
 
 
 class AppSetting(Base):
@@ -41,6 +42,7 @@ class Visit(Base):
     box_id = Column(String(40), ForeignKey("wash_boxes.id"), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     visit_no = Column(Integer, nullable=False)
+    plate_override = Column(String(20), nullable=True)
     bonus_total = Column(Integer, default=0, nullable=False)
     bonus_left = Column(Integer, default=0, nullable=False)
     bonus_expired = Column(Integer, default=0, nullable=False)
@@ -60,6 +62,26 @@ class BonusPulse(Base):
     amount = Column(Integer, default=0, nullable=False)
 
     visit = relationship("Visit", back_populates="pulses")
+
+
+class DetectionRecord(Base):
+    __tablename__ = "detections"
+    __table_args__ = (UniqueConstraint("box_id", "event_key", name="uq_detection_box_event"),)
+
+    id = Column(Integer, primary_key=True, index=True)
+    box_id = Column(String(40), ForeignKey("wash_boxes.id"), nullable=False, index=True)
+    event_key = Column(String(100), nullable=False)
+    image_key = Column(String(80), unique=True, nullable=False)
+    frame_index = Column(Integer, default=0, nullable=False)
+    frame_count = Column(Integer, default=1, nullable=False)
+    plate = Column(String(20), nullable=True, index=True)
+    status = Column(String(20), default="pending", nullable=False)
+    visit_id = Column(Integer, ForeignKey("visits.id"), nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    box = relationship("WashBox", back_populates="detections")
+    visit = relationship("Visit")
 
 
 class DeviceLog(Base):

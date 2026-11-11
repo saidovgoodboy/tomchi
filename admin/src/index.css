@@ -289,13 +289,18 @@ button, input {
   min-height: 42px;
 }
 
-.message {
-  margin-top: 14px;
-  padding: 11px 12px;
+.toast-message {
+  position: fixed;
+  z-index: 10;
+  top: 20px;
+  right: 20px;
+  max-width: min(420px, calc(100vw - 40px));
+  padding: 13px 16px;
   background: rgba(89, 167, 255, 0.08);
-  border: 1px solid rgba(89, 167, 255, 0.2);
-  border-radius: 10px;
-  color: #cfe8ff;
+  border: 1px solid rgba(89, 167, 255, 0.3);
+  border-radius: 12px;
+  color: #e4f2ff;
+  box-shadow: var(--shadow);
 }
 
 .simple-list {
@@ -331,6 +336,208 @@ tbody td {
 
 tbody tr:hover {
   background: rgba(255,255,255,0.01);
+}
+
+.table-actions {
+  white-space: nowrap;
+}
+
+.table-action {
+  margin-right: 6px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: rgba(255,255,255,0.04);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+
+.table-action:hover {
+  background: rgba(255,255,255,0.1);
+}
+
+.table-action.primary-action {
+  background: rgba(89, 167, 255, 0.18);
+  border-color: rgba(89, 167, 255, 0.35);
+}
+
+.plate-edit-input {
+  width: 140px;
+  padding: 8px 10px;
+  border: 1px solid rgba(89, 167, 255, 0.45);
+  border-radius: 8px;
+  background: rgba(7, 17, 29, 0.75);
+  color: var(--text);
+}
+
+.live-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 18px;
+}
+
+.camera-card {
+  min-width: 0;
+}
+
+.camera-card > header,
+.section-heading,
+.detection-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.camera-card > header h3,
+.section-heading h3 {
+  margin-bottom: 4px;
+}
+
+.camera-card > header > div > span,
+.section-heading p,
+.section-heading > span,
+.detection-meta time {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.live-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+  color: #91f2b0;
+  font-size: 0.78rem;
+}
+
+.live-indicator i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--success);
+  box-shadow: 0 0 10px rgba(74, 222, 128, 0.65);
+}
+
+.live-preview,
+.detection-image {
+  display: block;
+  width: 100%;
+  background: #02070d;
+  object-fit: contain;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.image-wrap {
+  position: relative;
+}
+
+.image-offline {
+  position: absolute;
+  right: 9px;
+  bottom: 9px;
+  padding: 6px 9px;
+  border-radius: 8px;
+  background: rgba(2, 7, 13, 0.85);
+  color: #ffb4b4;
+  font-size: 0.72rem;
+}
+
+.live-preview {
+  aspect-ratio: 4 / 3;
+}
+
+.detection-image {
+  aspect-ratio: 4 / 3;
+}
+
+.image-placeholder {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  border: 1px dashed rgba(255,255,255,0.16);
+  border-radius: 12px;
+  background: rgba(2, 7, 13, 0.65);
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.camera-current {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+}
+
+.detections-panel {
+  margin-top: 20px;
+}
+
+.section-heading {
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.section-heading p {
+  margin: 0;
+}
+
+.detection-list {
+  display: grid;
+  gap: 14px;
+}
+
+.detection-card {
+  display: grid;
+  grid-template-columns: minmax(180px, 280px) 1fr;
+  gap: 18px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: rgba(7, 17, 29, 0.45);
+}
+
+.detection-details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 13px;
+}
+
+.detection-details label {
+  display: flex;
+  width: min(100%, 340px);
+  flex-direction: column;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.detection-details input {
+  width: 100%;
+  border: 1px solid rgba(255,255,255,0.1);
+  border-radius: 10px;
+  background: rgba(7, 17, 29, 0.75);
+  color: var(--text);
+  padding: 10px 12px;
+}
+
+.detection-details input:disabled {
+  opacity: 0.75;
+}
+
+.detection-details .save-button:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.confirmed-status,
+.empty-state {
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 @media (max-width: 900px) {
@@ -371,5 +578,14 @@ tbody tr:hover {
 
   .inline-form button {
     min-height: 46px;
+  }
+
+  .detection-card {
+    grid-template-columns: 1fr;
+  }
+
+  .section-heading {
+    align-items: flex-start;
+    flex-direction: column;
   }
 }

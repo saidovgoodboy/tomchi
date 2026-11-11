@@ -3,6 +3,7 @@ __pycache__/
 .venv/
 .env
 *.db
+backend/storage/
 node_modules/
 admin/dist/
 admin/.vite/

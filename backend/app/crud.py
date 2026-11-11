@@ -15,6 +15,10 @@ DEFAULT_SETTINGS = {
 }
 
 
+def visit_plate(visit: Visit) -> str:
+    return visit.plate_override or visit.car.plate
+
+
 def get_bonus_settings(db: Session) -> dict[str, int]:
     values = {row.key: int(row.value) for row in db.query(AppSetting).all()}
     result = {}
@@ -84,7 +88,7 @@ def list_boxes(db: Session) -> list[dict]:
             "id": box.id,
             "name": box.name,
             "active_bonus_left": latest.bonus_left if latest and latest.is_active_bonus else 0,
-            "current_plate": latest.car.plate if latest else None,
+            "current_plate": visit_plate(latest) if latest else None,
         })
     return result
 
@@ -194,7 +198,7 @@ def get_display_text(db: Session, box_id: str = DEFAULT_BOX_ID) -> dict:
     if not latest_visit:
         return {"version": 1, "text": "NO VEHICLE", "status": "idle"}
 
-    plate = latest_visit.car.plate
+    plate = visit_plate(latest_visit)
     if latest_visit.is_active_bonus:
         return {
             "version": 2,
@@ -228,7 +232,7 @@ def press_bonus(db: Session, plate: str | None, box_id: str = DEFAULT_BOX_ID) ->
 
     pulse = BonusPulse(visit_id=visit.id, created_at=datetime.utcnow(), amount=amount)
     db.add(pulse)
-    db.add(DeviceLog(event="bonus_press", payload=f"{box.id}:{visit.car.plate}:{amount}"))
+    db.add(DeviceLog(event="bonus_press", payload=f"{box.id}:{visit_plate(visit)}:{amount}"))
     db.commit()
 
     return {
@@ -263,7 +267,7 @@ def list_recent_visits(db: Session, limit: int = 10, box_id: str | None = None):
         items.append(
             {
                 "id": visit.id,
-                "plate": visit.car.plate,
+                "plate": visit_plate(visit),
                 "visit_no": visit.visit_no,
                 "created_at": visit.created_at.isoformat(),
                 "bonus_total": visit.bonus_total,
@@ -307,4 +311,5 @@ def process_plate_detection(db: Session, plate: str, box_id: str = DEFAULT_BOX_I
         "bonus_left": visit.bonus_left,
         "is_active_bonus": bool(visit.is_active_bonus),
         "box_id": box.id,
+        "visit_id": visit.id,
     }
