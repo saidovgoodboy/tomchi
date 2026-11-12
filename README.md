@@ -114,6 +114,33 @@ Tailnet private: panel faqat tailnet'ga ulangan qurilmalardan ko'rinadi. `tailsc
 - Quvvat yonganda va reset paytida GPIO33 bir necha millisekund erkin qoladi. Firmware pin'ni birinchi bo'lib `OUTPUT` qilib `LOW` holatga keltiradi, lekin faol-HIGH kirish uchun **tashqi pull-down rezistor** (masalan 10 kΩ) qo'shing — aks holda bill acceptor soxta impuls ko'rishi mumkin.
 - Admin panelning Bonus bo'limida box test rejimini boshlash, 1 000–100 000 so'm oralig'ida test summasi yuborish va testni tugatish mumkin. Test impulslari mijoz bonusidan yechilmaydi; test vaqtida box tugmasi orqali odatiy bonus berilmaydi.
 
+## Testlar
+
+Backend testlari `backend/tests/` ichida, dev bog'liqliklari alohida faylda:
+
+```bash
+cd /home/saidov/tomchi
+python3 -m pip install --user -r backend/requirements-dev.txt
+cd backend && python3 -m pytest -q
+```
+
+Admin panel uchun TypeScript tekshiruvi va yig'ish:
+
+```bash
+cd /home/saidov/tomchi/admin
+npm ci
+npx tsc --noEmit
+npm run build
+```
+
+Ikkalasini bir buyruq bilan tekshirish uchun:
+
+```bash
+/home/saidov/tomchi/scripts/check.sh
+```
+
+GitHub Actions'ni yoqmoqchi bo'lsangiz, `gh auth refresh -s workflow` bilan token'ga `workflow` ruxsatini qo'shib, `.github/workflows/ci.yml` faylini qo'shing (hozircha token bu ruxsatga ega emas).
+
 ## API
 
 - `GET /health`

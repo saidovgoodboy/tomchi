@@ -1,7 +1,7 @@
 from datetime import timedelta
 import re
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -530,11 +530,30 @@ def get_stats(db: Session) -> dict:
     }
 
 
-def list_recent_visits(db: Session, limit: int = 10, box_id: str | None = None):
-    query = db.query(Visit)
+def list_recent_visits(
+    db: Session,
+    limit: int = 10,
+    box_id: str | None = None,
+    offset: int = 0,
+    plate: str | None = None,
+):
+    query = db.query(Visit).join(Car, Visit.car_id == Car.id)
     if box_id is not None:
         query = query.filter(Visit.box_id == box_id)
-    visits = query.order_by(Visit.created_at.desc()).limit(limit).all()
+    if plate:
+        normalized = normalize_plate(plate)
+        query = query.filter(
+            or_(
+                Car.plate.like(f"%{normalized}%"),
+                Visit.plate_override.like(f"%{normalized}%"),
+            )
+        )
+    visits = (
+        query.order_by(Visit.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     visit_ids = [visit.id for visit in visits]
     detection_by_visit = {}
     if visit_ids:
@@ -566,8 +585,21 @@ def list_recent_visits(db: Session, limit: int = 10, box_id: str | None = None):
     return items
 
 
-def list_recent_cars(db: Session, limit: int = 10):
-    cars = db.query(Car).order_by(Car.created_at.desc()).limit(limit).all()
+def list_recent_cars(
+    db: Session,
+    limit: int = 10,
+    offset: int = 0,
+    plate: str | None = None,
+):
+    query = db.query(Car)
+    if plate:
+        query = query.filter(Car.plate.like(f"%{normalize_plate(plate)}%"))
+    cars = (
+        query.order_by(Car.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
     return [
         {
             "id": car.id,

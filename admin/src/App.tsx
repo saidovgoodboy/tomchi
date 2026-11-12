@@ -80,6 +80,9 @@ const copy = {
     status: 'Holati',
     actions: 'Amallar',
     date: 'Sana',
+    search: 'Qidirish',
+    loadMore: 'Yana yuklash',
+    searchPlate: 'Raqam bo‘yicha qidirish',
     active: 'Faol',
     idle: 'Faol emas',
     save: 'Saqlash',
@@ -218,6 +221,9 @@ const copy = {
     status: 'Статус',
     actions: 'Действия',
     date: 'Дата',
+    search: 'Поиск',
+    loadMore: 'Загрузить ещё',
+    searchPlate: 'Поиск по номеру',
     active: 'Активен',
     idle: 'Неактивен',
     save: 'Сохранить',
@@ -590,6 +596,10 @@ export default function App() {
   const [settingsReady, setSettingsReady] = useState(false);
   const [sessionExpired, setSessionExpired] = useState(false);
   const [pulses, setPulses] = useState<PulseRow[]>([]);
+  const [visitSearch, setVisitSearch] = useState('');
+  const [appliedVisitSearch, setAppliedVisitSearch] = useState('');
+  const [visitLimit, setVisitLimit] = useState(10);
+  const [carLimit, setCarLimit] = useState(10);
   const [refundingId, setRefundingId] = useState<number | null>(null);
   const activeBoxRef = useRef(activeBoxId);
   activeBoxRef.current = activeBoxId;
@@ -674,8 +684,8 @@ export default function App() {
     try {
       const [statsData, visitsData, carsData, healthData, boxesData] = await Promise.all([
         request<Stats>('/api/stats'),
-        request<VisitRow[]>(`/api/visits?limit=10&box_id=${encodeURIComponent(activeBoxId)}`),
-        request<CarRow[]>('/api/cars?limit=10'),
+        request<VisitRow[]>(`/api/visits?limit=${visitLimit}&box_id=${encodeURIComponent(activeBoxId)}&plate=${encodeURIComponent(appliedVisitSearch)}`),
+        request<CarRow[]>(`/api/cars?limit=${carLimit}`),
         request<{ ok: boolean; anpr_enabled?: boolean; anpr_available?: boolean }>('/health'),
         request<BoxRow[]>('/api/boxes'),
       ]);
@@ -732,7 +742,7 @@ export default function App() {
       window.clearTimeout(timer);
       document.removeEventListener('visibilitychange', onVisible);
     };
-  }, [activeBoxId, authToken]);
+  }, [activeBoxId, authToken, visitLimit, carLimit, appliedVisitSearch]);
 
   useEffect(() => {
     if (!authToken || activeTab !== 'cameras') return;
@@ -852,6 +862,14 @@ export default function App() {
     const timeout = window.setTimeout(() => setMessage(''), 4000);
     return () => window.clearTimeout(timeout);
   }, [message]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setAppliedVisitSearch(visitSearch.trim());
+      setVisitLimit(10);
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [visitSearch]);
 
   useEffect(() => {
     // Box almashganda oldingi box ma'lumotlari ko'rinib qolmasin.
@@ -1208,12 +1226,25 @@ export default function App() {
           </tbody>
         </table>
       </div>
+      {cars.length >= carLimit && (
+        <button className="table-action" type="button" onClick={() => setCarLimit((value) => value + 20)}>
+          {t('loadMore')}
+        </button>
+      )}
     </section>
   );
 
   const renderVisits = () => (
     <section className="panel">
       <h3>{t('visits')}</h3>
+      <div className="inline-form">
+        <input
+          value={visitSearch}
+          onChange={(event) => setVisitSearch(event.target.value.toUpperCase())}
+          placeholder={t('searchPlate')}
+          aria-label={t('searchPlate')}
+        />
+      </div>
       <p className="settings-hint">{t('visitEditHint')}</p>
       <div className="table-wrap">
       <table className="visits-table">
@@ -1311,6 +1342,11 @@ export default function App() {
         </tbody>
       </table>
       </div>
+      {visits.length >= visitLimit && (
+        <button className="table-action" type="button" onClick={() => setVisitLimit((value) => value + 10)}>
+          {t('loadMore')}
+        </button>
+      )}
     </section>
   );
 

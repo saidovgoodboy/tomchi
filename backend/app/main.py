@@ -257,7 +257,7 @@ def api_update_settings(
         ensure_box(db, box_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return update_bonus_settings(
+    result = update_bonus_settings(
         db,
         body.bonus_amount,
         body.bonus_per_press,
@@ -270,6 +270,18 @@ def api_update_settings(
             for key in DEFAULT_DISPLAY_COPY
         },
     )
+    db.add(
+        DeviceLog(
+            event="admin_settings_update",
+            payload=(
+                f"{box_id}:amount={result['bonus_amount']},"
+                f"per_press={result['bonus_per_press']},"
+                f"every={result['bonus_every_visits']}"
+            ),
+        )
+    )
+    db.commit()
+    return result
 
 
 @app.get("/api/boxes")
@@ -352,20 +364,25 @@ def api_create_box(
 ):
     require_admin_token(authorization)
     try:
-        return create_box(db, payload.id, payload.name)
+        created = create_box(db, payload.id, payload.name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    db.add(DeviceLog(event="admin_box_created", payload=f"{created['id']}:{created['name']}"))
+    db.commit()
+    return created
 
 
 @app.get("/api/visits")
 def api_visits(
     limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=100000),
     box_id: str | None = Query(default=None),
+    plate: str | None = Query(default=None, max_length=20),
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     require_admin_token(authorization)
-    return list_recent_visits(db, limit=limit, box_id=box_id)
+    return list_recent_visits(db, limit=limit, box_id=box_id, offset=offset, plate=plate)
 
 
 @app.put("/api/visits/{visit_id}/plate")
@@ -384,6 +401,7 @@ def api_update_visit_plate(
     if not is_valid_plate(plate):
         raise HTTPException(status_code=400, detail="Invalid plate format")
 
+    visit_plate_before = visit.plate_override or visit.car.plate
     visit.plate_override = plate
     db.query(DetectionRecord).filter(DetectionRecord.visit_id == visit.id).update(
         {
@@ -392,6 +410,12 @@ def api_update_visit_plate(
         },
         synchronize_session=False,
     )
+    db.add(
+        DeviceLog(
+            event="admin_visit_plate_update",
+            payload=f"{visit.id}:{visit_plate_before}->{plate}",
+        )
+    )
     db.commit()
     return {"ok": True, "visit_id": visit.id, "plate": plate}
 
@@ -399,11 +423,13 @@ def api_update_visit_plate(
 @app.get("/api/cars")
 def api_cars(
     limit: int = Query(10, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=100000),
+    plate: str | None = Query(default=None, max_length=20),
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None, alias="Authorization"),
 ):
     require_admin_token(authorization)
-    return list_recent_cars(db, limit=limit)
+    return list_recent_cars(db, limit=limit, offset=offset, plate=plate)
 
 
 @app.post("/api/detect")
@@ -660,6 +686,7 @@ def get_live_frame(
 @app.get("/api/detections")
 def list_detections(
     limit: int = Query(30, ge=1, le=100),
+    offset: int = Query(0, ge=0, le=100000),
     box_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -674,7 +701,7 @@ def list_detections(
     query = db.query(DetectionRecord)
     if box_id:
         query = query.filter(DetectionRecord.box_id == box_id)
-    detections = query.order_by(DetectionRecord.created_at.desc()).limit(limit).all()
+    detections = query.order_by(DetectionRecord.created_at.desc()).offset(offset).limit(limit).all()
     return [
         {
             "id": item.id,

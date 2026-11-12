@@ -796,6 +796,68 @@ class AuthAndBonusRulesTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertTrue(response.json()["database_ok"])
 
+    def _seed_three_visits(self) -> None:
+        db = self.session_factory()
+        try:
+            box = WashBox(id="box-1", name="Box 1")
+            db.add(box)
+            db.flush()
+            base = datetime(2026, 11, 12, 8, 0, 0)
+            for index, plate in enumerate(["01A123BC", "02B456CD", "03C789DE"]):
+                car = Car(plate=plate)
+                db.add(car)
+                db.flush()
+                db.add(
+                    Visit(
+                        car_id=car.id,
+                        box_id=box.id,
+                        created_at=base + timedelta(minutes=index),
+                        visit_no=1,
+                    )
+                )
+            db.commit()
+        finally:
+            db.close()
+
+    def _admin_headers(self) -> dict[str, str]:
+        login = self.client.post(
+            "/api/auth/login",
+            json={"username": "admin-test", "password": "test-password"},
+        )
+        return {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    def test_visits_support_plate_search_and_offset(self):
+        self._seed_three_visits()
+        headers = self._admin_headers()
+
+        filtered = self.client.get("/api/visits?box_id=box-1&plate=123", headers=headers)
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual([row["plate"] for row in filtered.json()], ["01A123BC"])
+
+        page_one = self.client.get("/api/visits?box_id=box-1&limit=1&offset=0", headers=headers)
+        page_two = self.client.get("/api/visits?box_id=box-1&limit=1&offset=1", headers=headers)
+        self.assertEqual(len(page_one.json()), 1)
+        self.assertEqual(len(page_two.json()), 1)
+        self.assertNotEqual(page_one.json()[0]["id"], page_two.json()[0]["id"])
+
+    def test_admin_actions_are_written_to_device_log(self):
+        self._seed_active_bonus()
+        headers = self._admin_headers()
+
+        updated = self.client.put(
+            "/api/settings?box_id=box-1",
+            json={"bonus_amount": 30000},
+            headers=headers,
+        )
+        self.assertEqual(updated.status_code, 200)
+
+        db = self.session_factory()
+        try:
+            log = db.query(DeviceLog).filter(DeviceLog.event == "admin_settings_update").one()
+            self.assertIn("amount=30000", log.payload)
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()
