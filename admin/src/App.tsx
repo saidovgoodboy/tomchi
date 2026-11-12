@@ -678,7 +678,8 @@ export default function App() {
   // Barcha API xatolarini bir xil, tushunarli ko'rinishga keltiradi:
   // FastAPI `detail` ba'zan matn, ba'zan massiv bo'ladi; proxy 502 HTML qaytaradi.
   const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
-    const response = await apiFetch(path, init);
+    const url = path.startsWith('http') ? path : `${API_BASE}${path}`;
+    const response = await apiFetch(url, init);
     const text = await response.text();
     let body: unknown = null;
     if (text) {
@@ -715,6 +716,9 @@ export default function App() {
         request<{ ok: boolean; anpr_enabled?: boolean; anpr_available?: boolean }>('/health'),
         request<BoxRow[]>('/api/boxes'),
       ]);
+      if (!Array.isArray(visitsData) || !Array.isArray(carsData) || !Array.isArray(boxesData)) {
+        throw new Error(t('loadFailed'));
+      }
       setStats(statsData);
       setVisits(visitsData);
       setCars(carsData);
@@ -1152,7 +1156,7 @@ export default function App() {
 
   const handleDownloadCsv = async () => {
     try {
-      const response = await apiFetch('/api/visits/export.csv');
+      const response = await apiFetch(`${API_BASE}/api/visits/export.csv`);
       if (!response.ok) throw new Error(`${t('requestFailed')} (${response.status})`);
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);

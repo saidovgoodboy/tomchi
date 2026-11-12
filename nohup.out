@@ -1,0 +1,38 @@
+INFO:     Started server process [37833]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+INFO:     100.115.157.5:59758 - "OPTIONS /api/auth/login HTTP/1.1" 200 OK
+INFO:     100.115.157.5:59768 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47052 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47062 - "GET /api/boxes HTTP/1.1" 200 OK
+INFO:     127.0.0.1:47066 - "GET /api/visits?limit=10&box_id=box-1&plate= HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33616 - "OPTIONS /api/auth/login HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33626 - "POST /api/auth/login HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33626 - "OPTIONS /api/stats HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33616 - "OPTIONS /api/visits?limit=10&box_id=box-1&plate= HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33630 - "OPTIONS /api/cars?limit=10 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33632 - "OPTIONS /health HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33638 - "OPTIONS /api/boxes HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33648 - "OPTIONS /api/settings?box_id=box-1 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33626 - "OPTIONS /api/reports/daily HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33630 - "OPTIONS /api/visits?limit=10&box_id=box-1&plate= HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33632 - "OPTIONS /api/cars?limit=10 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33638 - "OPTIONS /health HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33648 - "OPTIONS /api/boxes HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33626 - "OPTIONS /api/settings?box_id=box-1 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33630 - "OPTIONS /api/reports/daily HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33616 - "GET /api/stats HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33626 - "GET /api/boxes HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33632 - "GET /api/visits?limit=10&box_id=box-1&plate= HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33648 - "GET /health HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33616 - "GET /api/reports/daily HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33638 - "GET /api/cars?limit=10 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33638 - "GET /api/reports/daily HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33648 - "GET /health HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33630 - "GET /api/settings?box_id=box-1 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33626 - "GET /api/stats HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33632 - "GET /api/visits?limit=10&box_id=box-1&plate= HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33638 - "GET /api/cars?limit=10 HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33616 - "GET /api/boxes HTTP/1.1" 200 OK
+INFO:     100.115.157.5:33648 - "GET /api/settings?box_id=box-1 HTTP/1.1" 200 OK
