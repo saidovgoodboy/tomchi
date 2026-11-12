@@ -12,3 +12,5 @@ admin/.vite/
 
 *.db-wal
 *.db-shm
+
+nohup.out
