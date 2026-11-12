@@ -1,0 +1,24 @@
+tomchi.duckdns.org {
+	encode zstd gzip
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		Strict-Transport-Security "max-age=31536000"
+		Content-Security-Policy "default-src 'self'; img-src 'self' blob: data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+	}
+
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle /health {
+		reverse_proxy 127.0.0.1:8000
+	}
+
+	handle {
+		root * /var/www/tomchi
+		try_files {path} /index.html
+		file_server
+	}
+}

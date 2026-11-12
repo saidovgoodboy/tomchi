@@ -1,0 +1,14 @@
+[Unit]
+Description=Update Tomchi DuckDNS address
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=saidov
+EnvironmentFile=/etc/tomchi/duckdns.env
+ExecStart=/bin/sh /usr/local/libexec/tomchi-duckdns-update
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true

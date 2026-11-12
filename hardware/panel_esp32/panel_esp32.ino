@@ -4,6 +4,7 @@
 #include <ESP32-HUB75-MatrixPanel-I2S-DMA.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
+#include <string.h>
 
 // Configure these values for each wash box before flashing.
 const char* WIFI_SSID = "YOUR_WIFI_SSID";
@@ -14,6 +15,7 @@ const char* BOX_ID = "box-1";
 const char* SERVER_ROOT_CA = "";
 
 constexpr int BUTTON_PIN = 32;
+constexpr int PULSE_OUTPUT_PIN = 33;
 constexpr uint16_t PANEL_WIDTH = 32;
 constexpr uint16_t PANEL_HEIGHT = 16;
 constexpr uint8_t PANEL_CHAIN = 1;
@@ -21,12 +23,8 @@ constexpr uint32_t DISPLAY_POLL_MS = 1000;
 constexpr uint32_t SCROLL_INTERVAL_MS = 45;
 constexpr uint32_t WIFI_RETRY_MS = 10000;
 constexpr uint32_t BUTTON_DEBOUNCE_MS = 50;
-constexpr bool ENABLE_BONUS_REDEMPTION = false;
-// Match the bill acceptor's pulse-frequency timing preset; output remains disabled.
-constexpr uint16_t PULSE_PERIOD_MS = 100;
-static_assert(
-    PULSE_PERIOD_MS == 50 || PULSE_PERIOD_MS == 100 || PULSE_PERIOD_MS == 200,
-    "PULSE_PERIOD_MS must be 50, 100, or 200 ms");
+constexpr uint16_t DEFAULT_PULSE_FREQUENCY_MS = 100;
+constexpr bool DEFAULT_PULSE_ACTIVE_HIGH = true;
 
 // Common HUB75 pin map. Check the exact panel/controller pinout before wiring.
 static HUB75_I2S_CFG::i2s_pins panelPins = {
@@ -39,15 +37,20 @@ static WiFiClientSecure secureClient;
 
 String displayText = "TOMCHI";
 String lastRenderedText;
+String displayRemainingLabel = "MUKOFOT QOLDI";
+String displayFinishedText = "MUKOFOT TUGADI";
+String displayCurrencyLabel = "SO'M";
 uint32_t lastDisplayPollAt = 0;
 uint32_t lastScrollAt = 0;
 uint32_t lastWiFiAttemptAt = 0;
 bool wifiAttempted = false;
-uint32_t lastDebounceAt = 0;
-int lastButtonReading = HIGH;
-int stableButtonState = HIGH;
+volatile uint8_t pendingButtonPresses = 0;
+volatile uint32_t lastButtonInterruptAt = 0;
 int scrollX = PANEL_WIDTH;
 bool bonusDisplay = false;
+bool testModeActive = false;
+uint16_t pulseFrequencyMs = DEFAULT_PULSE_FREQUENCY_MS;
+bool pulseActiveHigh = DEFAULT_PULSE_ACTIVE_HIGH;
 
 String endpointUrl(const char* path) {
   return String(SERVER_URL) + path;
@@ -88,6 +91,26 @@ bool beginRequest(HTTPClient& http, const char* path) {
   return beginServerRequest(http, path);
 }
 
+void setPulseIdle() {
+  digitalWrite(PULSE_OUTPUT_PIN, pulseActiveHigh ? LOW : HIGH);
+}
+
+void emitPulses(int pulseCount) {
+  if (pulseCount <= 0) return;
+
+  const uint16_t activeMs = pulseFrequencyMs / 2;
+  const uint16_t inactiveMs = pulseFrequencyMs - activeMs;
+  const uint8_t activeLevel = pulseActiveHigh ? HIGH : LOW;
+  const uint8_t inactiveLevel = pulseActiveHigh ? LOW : HIGH;
+
+  for (int pulse = 0; pulse < pulseCount; pulse++) {
+    digitalWrite(PULSE_OUTPUT_PIN, activeLevel);
+    delay(activeMs);
+    digitalWrite(PULSE_OUTPUT_PIN, inactiveLevel);
+    delay(inactiveMs);
+  }
+}
+
 void setDisplay(const String& text, bool isBonus) {
   if (text.isEmpty()) return;
   if (displayText != text || bonusDisplay != isBonus) {
@@ -109,6 +132,26 @@ void fetchDisplay() {
     if (!error) {
       const char* text = response["text"] | "";
       const char* state = response["status"] | "";
+      const char* polarity = response["pulse_polarity"] | "";
+      const char* remainingLabel = response["display_remaining_label"] | "MUKOFOT QOLDI";
+      const char* finishedText = response["display_finished_text"] | "MUKOFOT TUGADI";
+      const char* currencyLabel = response["display_currency_label"] | "SO'M";
+      const int frequencyMs = response["pulse_frequency_ms"] | pulseFrequencyMs;
+      displayRemainingLabel = remainingLabel;
+      displayFinishedText = finishedText;
+      displayCurrencyLabel = currencyLabel;
+      testModeActive = response["test_mode"] | false;
+      const int testPulseCount = response["test_pulse_count"] | 0;
+      if (strcmp(polarity, "HIGH") == 0) pulseActiveHigh = true;
+      else if (strcmp(polarity, "LOW") == 0) pulseActiveHigh = false;
+      if (frequencyMs == 50 || frequencyMs == 100 || frequencyMs == 200) {
+        pulseFrequencyMs = static_cast<uint16_t>(frequencyMs);
+      }
+      setPulseIdle();
+      if (testPulseCount > 0) {
+        Serial.printf("Emitting %d admin test pulses\n", testPulseCount);
+        emitPulses(testPulseCount);
+      }
       setDisplay(String(text), String(state) == "bonus_active");
     } else {
       Serial.printf("Display JSON parse failed: %s\n", error.c_str());
@@ -136,12 +179,16 @@ void requestBonus() {
       const int amount = response["amount"] | 0;
       const int pulseCount = response["pulse_count"] | 0;
       const int bonusLeft = response["bonus_left"] | 0;
-      Serial.printf("Bonus approved: %d so'm, %d impulses; no physical impulses are emitted by this firmware\n",
-                    amount, pulseCount);
+      Serial.printf("Bonus approved: %d so'm, emitting %d pulses (%s active, %u ms period)\n",
+                    amount,
+                    pulseCount,
+                    pulseActiveHigh ? "HIGH" : "LOW",
+                    static_cast<unsigned>(pulseFrequencyMs));
+      emitPulses(pulseCount);
       if (bonusLeft > 0) {
-        setDisplay("BONUS QOLDI: " + String(bonusLeft) + " SO'M", true);
+        setDisplay(displayRemainingLabel + ": " + String(bonusLeft) + " " + displayCurrencyLabel, true);
       } else {
-        setDisplay("BONUS TUGADI", false);
+        setDisplay(displayFinishedText, false);
       }
     } else if (!error) {
       const char* message = response["message"] | "Bonus not available";
@@ -155,20 +202,26 @@ void requestBonus() {
   http.end();
 }
 
-void pollButton() {
-  const int reading = digitalRead(BUTTON_PIN);
-  if (reading != lastButtonReading) lastDebounceAt = millis();
+void IRAM_ATTR onButtonPress() {
+  const uint32_t now = micros();
+  if (now - lastButtonInterruptAt < BUTTON_DEBOUNCE_MS * 1000U) return;
+  lastButtonInterruptAt = now;
+  if (pendingButtonPresses < 255) pendingButtonPresses++;
+}
 
-  if (millis() - lastDebounceAt >= BUTTON_DEBOUNCE_MS &&
-      reading != stableButtonState) {
-    stableButtonState = reading;
-    if (stableButtonState == LOW) {
-      if (ENABLE_BONUS_REDEMPTION) requestBonus();
-      else Serial.println("Button detected; bonus request disabled until main-board pulse output is implemented");
+void pollButton() {
+  noInterrupts();
+  const uint8_t presses = pendingButtonPresses;
+  pendingButtonPresses = 0;
+  interrupts();
+
+  for (uint8_t press = 0; press < presses; press++) {
+    if (testModeActive) {
+      Serial.println("Button press ignored while box test mode is active");
+    } else {
+      requestBonus();
     }
   }
-
-  lastButtonReading = reading;
 }
 
 void scrollDisplay() {
@@ -193,6 +246,9 @@ void scrollDisplay() {
 void setup() {
   Serial.begin(115200);
   pinMode(BUTTON_PIN, INPUT_PULLUP);
+  pinMode(PULSE_OUTPUT_PIN, OUTPUT);
+  setPulseIdle();
+  attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonPress, FALLING);
   WiFi.mode(WIFI_STA);
 
   panelConfig.gpio = panelPins;
@@ -204,8 +260,10 @@ void setup() {
 
   connectWiFi();
   Serial.printf("Tomchi panel ready for %s\n", BOX_ID);
-  Serial.printf("Pulse-frequency preset: %u ms; physical output remains disabled\n",
-                static_cast<unsigned>(PULSE_PERIOD_MS));
+  Serial.printf("Pulse output pin %d ready; defaults: %s active, %u ms period\n",
+                PULSE_OUTPUT_PIN,
+                pulseActiveHigh ? "HIGH" : "LOW",
+                static_cast<unsigned>(pulseFrequencyMs));
 }
 
 void loop() {

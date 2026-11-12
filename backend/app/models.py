@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -32,6 +32,16 @@ class AppSetting(Base):
 
     key = Column(String(80), primary_key=True)
     value = Column(String(255), nullable=False)
+
+
+class BoxTestState(Base):
+    __tablename__ = "box_test_states"
+
+    box_id = Column(String(40), ForeignKey("wash_boxes.id"), primary_key=True)
+    is_active = Column(Integer, default=0, nullable=False)
+    pending_amount = Column(Integer, nullable=True)
+    pending_pulse_count = Column(Integer, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
 
 
 class Visit(Base):
@@ -75,6 +85,7 @@ class DetectionRecord(Base):
     frame_index = Column(Integer, default=0, nullable=False)
     frame_count = Column(Integer, default=1, nullable=False)
     plate = Column(String(20), nullable=True, index=True)
+    ocr_confidence = Column(Float, nullable=True)
     status = Column(String(20), default="pending", nullable=False)
     visit_id = Column(Integer, ForeignKey("visits.id"), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)

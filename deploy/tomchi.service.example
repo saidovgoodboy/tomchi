@@ -1,0 +1,19 @@
+[Unit]
+Description=Tomchi API
+After=network.target
+
+[Service]
+Type=simple
+User=saidov
+WorkingDirectory=/home/saidov/tomchi
+Environment=PYTHONPATH=/home/saidov/tomchi/backend
+EnvironmentFile=/home/saidov/tomchi/.env
+ExecStart=/usr/bin/python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
+Restart=on-failure
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

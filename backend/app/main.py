@@ -1,21 +1,41 @@
 from contextlib import asynccontextmanager
 from datetime import datetime
+import logging
 import time
+from typing import Literal
 from uuid import uuid4
 
 from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import FileResponse, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
+from app.anpr import (
+    OCRProcessingError,
+    OCRUnavailableError,
+    is_ocr_available,
+    recognize_plate,
+)
+from app.auth import (
+    authenticate_admin,
+    enforce_login_rate_limit,
+    require_admin_token,
+    require_device_key,
+)
 from app.config import get_settings
 from app.crud import (
+    DEFAULT_DISPLAY_COPY,
     DEFAULT_BOX_ID,
     DEFAULT_BOX_NAME,
+    consume_box_test_pulse,
     create_box,
     ensure_box,
+    finish_box_test,
+    get_box_test_status,
     get_bonus_settings,
     get_display_text,
     get_stats,
@@ -24,6 +44,8 @@ from app.crud import (
     list_recent_cars,
     list_recent_visits,
     press_bonus,
+    queue_box_test_pulse,
+    start_box_test,
     normalize_plate,
     process_plate_detection,
     update_bonus_settings,
@@ -42,9 +64,11 @@ from app.schemas import (
     DisplayResponse,
     PlateDetectionRequest,
     StatsOut,
+    TestPulseRequest,
 )
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -60,6 +84,10 @@ async def lifespan(app: FastAPI):
         if "plate_override" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE visits ADD COLUMN plate_override VARCHAR(20)"))
+        columns = {column["name"] for column in inspect(engine).get_columns("detections")}
+        if "ocr_confidence" not in columns:
+            with engine.begin() as connection:
+                connection.execute(text("ALTER TABLE detections ADD COLUMN ocr_confidence FLOAT"))
     with SessionLocal() as db:
         if db.get(WashBox, DEFAULT_BOX_ID) is None:
             db.add(WashBox(id=DEFAULT_BOX_ID, name=DEFAULT_BOX_NAME))
@@ -79,28 +107,63 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Tomchi API", version="1.0.0", lifespan=lifespan)
+is_production = settings.app_env.lower() in {"prod", "production"}
+app = FastAPI(
+    title="Tomchi API",
+    version="1.0.0",
+    lifespan=lifespan,
+    docs_url=None if is_production else "/docs",
+    redoc_url=None if is_production else "/redoc",
+    openapi_url=None if is_production else "/openapi.json",
+)
 
+allowed_origins = [
+    origin.strip()
+    for origin in settings.admin_origins.split(",")
+    if origin.strip()
+]
+if "*" in allowed_origins:
+    raise ValueError("ADMIN_ORIGINS must list explicit origins, not '*'.")
+if is_production:
+    allowed_hosts = [
+        host.strip()
+        for host in settings.allowed_hosts.split(",")
+        if host.strip()
+    ]
+    if not allowed_hosts or "*" in allowed_hosts:
+        raise ValueError("Production requires explicit ALLOWED_HOSTS.")
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=allowed_hosts)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=allowed_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def enforce_device_key(header_value: str | None, required: bool = False):
-    if header_value is None and not required:
-        return
-    if header_value != settings.device_key:
-        raise HTTPException(status_code=401, detail="Invalid device key")
 
 
 class BonusSettingsUpdate(BaseModel):
     bonus_amount: int | None = Field(default=None, ge=1000, multiple_of=1000)
     bonus_per_press: int | None = Field(default=None, ge=1000, le=100000, multiple_of=1000)
     bonus_every_visits: int | None = Field(default=None, ge=1)
+    pulse_polarity: Literal["HIGH", "LOW"] | None = None
+    pulse_frequency_ms: Literal[50, 100, 200] | None = None
+    display_idle_text: str | None = Field(default=None, min_length=1, max_length=48)
+    display_visit_label: str | None = Field(default=None, min_length=1, max_length=16)
+    display_reward_label: str | None = Field(default=None, min_length=1, max_length=16)
+    display_remaining_label: str | None = Field(default=None, min_length=1, max_length=24)
+    display_finished_text: str | None = Field(default=None, min_length=1, max_length=32)
+    display_currency_label: str | None = Field(default=None, min_length=1, max_length=12)
+
+    @field_validator(*DEFAULT_DISPLAY_COPY)
+    @classmethod
+    def display_copy_uses_printable_ascii(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or not all(32 <= ord(char) <= 126 for char in value):
+            raise ValueError("P10 display text must use printable ASCII characters")
+        return value
 
 
 class BoxCreate(BaseModel):
@@ -116,57 +179,157 @@ class VisitPlateUpdate(BaseModel):
     plate: str = Field(min_length=8, max_length=20)
 
 
+class AdminLogin(BaseModel):
+    username: str = Field(min_length=1, max_length=100)
+    password: str = Field(min_length=1, max_length=256)
+
+
 @app.get("/health")
 def health():
-    return {"ok": True, "service": "tomchi-backend"}
+    return {
+        "ok": True,
+        "service": "tomchi-backend",
+        "anpr_enabled": settings.anpr_enabled,
+        "anpr_available": settings.anpr_enabled and is_ocr_available(settings.anpr_tesseract_cmd),
+    }
+
+
+@app.post("/api/auth/login")
+def api_admin_login(payload: AdminLogin, request: Request):
+    client_ip = request.client.host if request.client else "unknown"
+    enforce_login_rate_limit(client_ip)
+    return authenticate_admin(payload.username, payload.password)
 
 
 @app.get("/api/stats", response_model=StatsOut)
-def api_stats(db: Session = Depends(get_db), x_device_key: str | None = Header(default=None, alias="X-Device-Key")):
-    enforce_device_key(x_device_key)
+def api_stats(
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
     return get_stats(db)
 
 
 @app.get("/api/settings")
 def api_settings(
+    box_id: str = Query(default=DEFAULT_BOX_ID, min_length=1, max_length=40),
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key)
-    return get_bonus_settings(db)
+    require_admin_token(authorization)
+    try:
+        ensure_box(db, box_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_bonus_settings(db, box_id)
 
 
 @app.put("/api/settings")
 def api_update_settings(
     body: BonusSettingsUpdate,
+    box_id: str = Query(default=DEFAULT_BOX_ID, min_length=1, max_length=40),
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key)
+    require_admin_token(authorization)
+    try:
+        ensure_box(db, box_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
     return update_bonus_settings(
         db,
         body.bonus_amount,
         body.bonus_per_press,
         body.bonus_every_visits,
+        body.pulse_polarity,
+        body.pulse_frequency_ms,
+        box_id,
+        display_copy={
+            key: getattr(body, key)
+            for key in DEFAULT_DISPLAY_COPY
+        },
     )
 
 
 @app.get("/api/boxes")
 def api_boxes(
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key)
+    require_admin_token(authorization)
     return list_boxes(db)
+
+
+@app.get("/api/boxes/{box_id}/test")
+def api_box_test_status(
+    box_id: str,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    try:
+        box = ensure_box(db, box_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return get_box_test_status(db, box.id)
+
+
+@app.post("/api/boxes/{box_id}/test/start")
+def api_start_box_test(
+    box_id: str,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    try:
+        box = ensure_box(db, box_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return start_box_test(db, box.id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/boxes/{box_id}/test/pulses")
+def api_queue_box_test_pulse(
+    box_id: str,
+    payload: TestPulseRequest,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    try:
+        box = ensure_box(db, box_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    try:
+        return queue_box_test_pulse(db, box.id, payload.amount)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@app.post("/api/boxes/{box_id}/test/finish")
+def api_finish_box_test(
+    box_id: str,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    try:
+        box = ensure_box(db, box_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return finish_box_test(db, box.id)
 
 
 @app.post("/api/boxes")
 def api_create_box(
     payload: BoxCreate,
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key)
+    require_admin_token(authorization)
     try:
         return create_box(db, payload.id, payload.name)
     except ValueError as exc:
@@ -178,9 +341,9 @@ def api_visits(
     limit: int = Query(10, ge=1, le=100),
     box_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key)
+    require_admin_token(authorization)
     return list_recent_visits(db, limit=limit, box_id=box_id)
 
 
@@ -189,9 +352,9 @@ def api_update_visit_plate(
     visit_id: int,
     payload: VisitPlateUpdate,
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_admin_token(authorization)
     visit = db.get(Visit, visit_id)
     if visit is None:
         raise HTTPException(status_code=404, detail="Visit not found")
@@ -213,8 +376,12 @@ def api_update_visit_plate(
 
 
 @app.get("/api/cars")
-def api_cars(limit: int = Query(10, ge=1, le=100), db: Session = Depends(get_db), x_device_key: str | None = Header(default=None, alias="X-Device-Key")):
-    enforce_device_key(x_device_key)
+def api_cars(
+    limit: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
     return list_recent_cars(db, limit=limit)
 
 
@@ -222,10 +389,10 @@ def api_cars(limit: int = Query(10, ge=1, le=100), db: Session = Depends(get_db)
 def api_detect(
     payload: PlateDetectionRequest,
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
     x_box_id: str = Header(default=DEFAULT_BOX_ID, alias="X-Box-Id"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_admin_token(authorization)
     try:
         return process_plate_detection(db, payload.plate, x_box_id)
     except ValueError as exc:
@@ -238,12 +405,23 @@ def api_display(
     x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
     x_box_id: str = Header(default=DEFAULT_BOX_ID, alias="X-Box-Id"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_device_key(x_device_key)
     try:
         display = get_display_text(db, x_box_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return DisplayResponse(**display)
+    settings = get_bonus_settings(db, x_box_id)
+    test_pulse = consume_box_test_pulse(db, x_box_id)
+    return DisplayResponse(
+        **display,
+        pulse_polarity=settings["pulse_polarity"],
+        pulse_frequency_ms=settings["pulse_frequency_ms"],
+        **{
+            key: settings[key]
+            for key in DEFAULT_DISPLAY_COPY
+        },
+        **test_pulse,
+    )
 
 
 @app.post("/api/bonus/press", response_model=BonusPressResponse)
@@ -253,7 +431,7 @@ def api_bonus_press(
     x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
     x_box_id: str = Header(default=DEFAULT_BOX_ID, alias="X-Box-Id"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_device_key(x_device_key)
     try:
         result = press_bonus(db, payload.plate, x_box_id)
     except ValueError as exc:
@@ -271,7 +449,7 @@ async def api_detect_image(
     x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
     x_box_id: str = Header(default=DEFAULT_BOX_ID, alias="X-Box-Id"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_device_key(x_device_key)
     if not event_id.replace("-", "").replace("_", "").isalnum():
         raise HTTPException(status_code=400, detail="Invalid event ID")
     if frame_index >= frame_count:
@@ -293,6 +471,7 @@ async def api_detect_image(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     try:
+        ocr_status = "disabled" if not settings.anpr_enabled else "no_match"
         detection = (
             db.query(DetectionRecord)
             .filter(
@@ -323,6 +502,39 @@ async def api_detect_image(
                 event="image_received",
                 payload=f"{box.id}:{detection.id}:{frame_index + 1}/{frame_count}",
             ))
+            if settings.anpr_enabled:
+                try:
+                    candidate = await run_in_threadpool(
+                        recognize_plate,
+                        content,
+                        settings.anpr_tesseract_cmd,
+                        settings.anpr_timeout_seconds,
+                    )
+                except OCRUnavailableError as exc:
+                    logger.error("ANPR OCR unavailable for detection %s: %s", detection.id, exc)
+                    ocr_status = "unavailable"
+                except OCRProcessingError as exc:
+                    logger.warning("ANPR OCR failed for detection %s: %s", detection.id, exc)
+                    ocr_status = "error"
+                else:
+                    if candidate is None:
+                        ocr_status = "no_match"
+                    elif candidate.confidence < settings.anpr_min_confidence:
+                        ocr_status = "low_confidence"
+                    else:
+                        ocr_status = "recognized"
+                        if (
+                            detection.visit_id is None
+                            and detection.status != "confirmed"
+                            and (
+                                detection.ocr_confidence is None
+                                or candidate.confidence > detection.ocr_confidence
+                            )
+                        ):
+                            detection.plate = candidate.plate
+                            detection.ocr_confidence = candidate.confidence
+        else:
+            ocr_status = "stale_frame"
         db.commit()
         if frame_index + 1 == frame_count:
             cleanup_detection_images(
@@ -343,8 +555,10 @@ async def api_detect_image(
         "frame_count": frame_count,
         "box_id": x_box_id,
         "status": detection.status,
+        "recognized": detection.plate is not None,
+        "ocr_status": ocr_status,
         "plate": detection.plate,
-        "message": "Image saved; ANPR/OCR provider is not configured",
+        "ocr_confidence": detection.ocr_confidence,
     }
 
 
@@ -355,7 +569,7 @@ async def upload_live_frame(
     db: Session = Depends(get_db),
     x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_device_key(x_device_key)
     if request.headers.get("content-type", "").split(";", 1)[0].strip() != "image/jpeg":
         raise HTTPException(status_code=415, detail="Expected image/jpeg")
     try:
@@ -381,9 +595,9 @@ async def upload_live_frame(
 def get_live_frame(
     box_id: str,
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_admin_token(authorization)
     try:
         box = ensure_box(db, box_id)
     except ValueError as exc:
@@ -403,9 +617,9 @@ def list_detections(
     limit: int = Query(30, ge=1, le=100),
     box_id: str | None = Query(default=None),
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_admin_token(authorization)
     cleanup_detection_images(
         db,
         settings.storage_dir,
@@ -421,6 +635,7 @@ def list_detections(
             "id": item.id,
             "box_id": item.box_id,
             "plate": item.plate,
+            "ocr_confidence": item.ocr_confidence,
             "status": item.status,
             "frame_index": item.frame_index,
             "frame_count": item.frame_count,
@@ -435,9 +650,9 @@ def list_detections(
 def get_detection_image(
     detection_id: int,
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_admin_token(authorization)
     detection = db.get(DetectionRecord, detection_id)
     if detection is None:
         raise HTTPException(status_code=404, detail="Detection not found")
@@ -452,9 +667,9 @@ def correct_detection_plate(
     detection_id: int,
     payload: DetectionPlateCorrection,
     db: Session = Depends(get_db),
-    x_device_key: str | None = Header(default=None, alias="X-Device-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
 ):
-    enforce_device_key(x_device_key, required=True)
+    require_admin_token(authorization)
     detection = db.get(DetectionRecord, detection_id)
     if detection is None:
         raise HTTPException(status_code=404, detail="Detection not found")

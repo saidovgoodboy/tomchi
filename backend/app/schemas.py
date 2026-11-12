@@ -12,10 +12,24 @@ class DisplayResponse(BaseModel):
     version: int
     text: str
     status: str
+    pulse_polarity: str
+    pulse_frequency_ms: int
+    display_idle_text: str
+    display_visit_label: str
+    display_reward_label: str
+    display_remaining_label: str
+    display_finished_text: str
+    display_currency_label: str
+    test_mode: bool
+    test_pulse_count: int
 
 
 class BonusPressRequest(BaseModel):
     plate: str | None = None
+
+
+class TestPulseRequest(BaseModel):
+    amount: int = Field(ge=1000, le=100000, multiple_of=1000)
 
 
 class BonusPressResponse(BaseModel):
