@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent, type JSX } from 'react';
 
 type TabKey = 'dashboard' | 'cars' | 'visits' | 'bonus' | 'cameras';
 type PulsePolarity = 'HIGH' | 'LOW';
@@ -339,7 +339,26 @@ function AppearanceControls({
         aria-label={theme === 'dark' ? t('switchToDay') : t('switchToNight')}
         title={theme === 'dark' ? t('switchToDay') : t('switchToNight')}
       >
-        <span aria-hidden="true">{theme === 'dark' ? '☀' : '☾'}</span>
+        <svg
+          viewBox="0 0 24 24"
+          width="17"
+          height="17"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          {theme === 'dark' ? (
+            <>
+              <circle cx="12" cy="12" r="4" />
+              <path d="M12 2.5v2M12 19.5v2M4.6 4.6 6 6M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4 6 18M18 6l1.4-1.4" />
+            </>
+          ) : (
+            <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5Z" />
+          )}
+        </svg>
       </button>
     </div>
   );
@@ -388,6 +407,66 @@ type DetectionRow = {
   created_at: string;
   image_url: string;
 };
+
+type IconName = 'home' | 'car' | 'visits' | 'bonus' | 'camera';
+
+const ICON_PATHS: Record<IconName, JSX.Element> = {
+  home: (
+    <>
+      <path d="M3 10.5 12 3l9 7.5" />
+      <path d="M5 9.8V21h14V9.8" />
+    </>
+  ),
+  car: (
+    <>
+      <path d="M4.5 17.5h15" />
+      <path d="M6 17.5v-4l1.8-4.1A2 2 0 0 1 9.6 8h4.8a2 2 0 0 1 1.8 1.4L18 13.5v4" />
+      <circle cx="8" cy="17.8" r="1.4" />
+      <circle cx="16" cy="17.8" r="1.4" />
+    </>
+  ),
+  visits: (
+    <>
+      <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
+      <path d="M3.2 4.5v4.8h4.8" />
+      <path d="M12 8v4.3l3 1.8" />
+    </>
+  ),
+  bonus: (
+    <>
+      <rect x="3.5" y="9" width="17" height="11.5" rx="2" />
+      <path d="M3.5 13h17" />
+      <path d="M12 9v11.5" />
+      <path d="M12 9C9.8 9 8 7.9 8 6.2A2.2 2.2 0 0 1 12 5.5" />
+      <path d="M12 9c2.2 0 4-1.1 4-2.8a2.2 2.2 0 0 0-4-.7" />
+    </>
+  ),
+  camera: (
+    <>
+      <path d="M4 8.5h2.8L8.3 6h7.4l1.5 2.5H20a1 1 0 0 1 1 1V19a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5a1 1 0 0 1 1-1Z" />
+      <circle cx="12" cy="13.5" r="3.4" />
+    </>
+  ),
+};
+
+function Icon({ name }: { name: IconName }) {
+  return (
+    <svg
+      className="nav-icon"
+      viewBox="0 0 24 24"
+      width="18"
+      height="18"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      {ICON_PATHS[name]}
+    </svg>
+  );
+}
 
 type DailyReport = {
   date: string;
@@ -566,7 +645,7 @@ export default function App() {
     localStorage.getItem('tomchi-language') === 'ru' ? 'ru' : 'uz'
   ));
   const [theme, setTheme] = useState<Theme>(() => (
-    localStorage.getItem('tomchi-theme') === 'light' ? 'light' : 'dark'
+    localStorage.getItem('tomchi-theme') === 'dark' ? 'dark' : 'light'
   ));
   const [authToken, setAuthToken] = useState(() => sessionStorage.getItem('tomchi-admin-token') ?? '');
   const [loginUsername, setLoginUsername] = useState('');
@@ -1243,7 +1322,10 @@ export default function App() {
           <li>{t('todayVisits')}: <strong>{formatNumber(report?.visits ?? 0)}</strong></li>
           <li>{t('todayCars')}: <strong>{formatNumber(report?.cars ?? 0)}</strong></li>
           <li>{t('todayBonus')}: <strong>{formatNumber(report?.bonus_awarded ?? 0)} so‘m</strong></li>
-          <li>{t('todayPulses')}: <strong>{formatNumber(report?.pulses ?? 0)}</strong> ({formatNumber(report?.pulses_amount ?? 0)} so‘m)</li>
+          <li>
+            {t('todayPulses')}:
+            <strong>{formatNumber(report?.pulses ?? 0)} ta · {formatNumber(report?.pulses_amount ?? 0)} so‘m</strong>
+          </li>
         </ul>
       </section>
 
@@ -1290,9 +1372,9 @@ export default function App() {
           <tbody>
             {cars.map((car) => (
               <tr key={car.id}>
-                <td>{car.plate}</td>
-                <td>{formatNumber(car.visit_count)}</td>
-                <td>{new Date(car.created_at).toLocaleDateString(language === 'uz' ? 'uz-UZ' : 'ru-RU')}</td>
+                <td data-label={t('plate')}>{car.plate}</td>
+                <td data-label={t('visitsCount')}>{formatNumber(car.visit_count)}</td>
+                <td data-label={t('created')}>{new Date(car.created_at).toLocaleDateString(language === 'uz' ? 'uz-UZ' : 'ru-RU')}</td>
               </tr>
             ))}
             {!cars.length && <tr><td colSpan={3}>{t('noCars')}</td></tr>}
@@ -1309,9 +1391,10 @@ export default function App() {
 
   const renderVisits = () => (
     <section className="panel">
-      <h3>{t('visits')}</h3>
       <div className="inline-form">
         <input
+          className="search-input"
+          type="search"
           value={visitSearch}
           onChange={(event) => setVisitSearch(event.target.value.toUpperCase())}
           placeholder={t('searchPlate')}
@@ -1338,7 +1421,7 @@ export default function App() {
         <tbody>
           {visits.map((visit) => (
             <tr key={visit.id}>
-              <td>
+              <td data-label={t('plate')}>
                 {editingVisitId === visit.id ? (
                   <input
                     className="plate-edit-input"
@@ -1349,7 +1432,7 @@ export default function App() {
                   />
                 ) : visit.plate}
               </td>
-              <td>
+              <td data-label={t('visitImage')}>
                 {visit.image_url ? (
                   <button
                     className="visit-image-button"
@@ -1373,14 +1456,14 @@ export default function App() {
                   <span className="visit-image-empty">{t('noImage')}</span>
                 )}
               </td>
-              <td>{new Date(visit.created_at).toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU', {
+              <td data-label={t('arrivalTime')}>{new Date(visit.created_at).toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU', {
                 dateStyle: 'short',
                 timeStyle: 'short',
               })}</td>
-              <td>{formatNumber(visit.visit_no)}</td>
-              <td>{formatNumber(visit.bonus_left)}</td>
-              <td>{visit.is_active_bonus ? t('active') : t('idle')}</td>
-              <td className="table-actions">
+              <td data-label={t('visit')}>{formatNumber(visit.visit_no)}</td>
+              <td data-label={t('bonusLeft')}>{formatNumber(visit.bonus_left)}</td>
+              <td data-label={t('status')}>{visit.is_active_bonus ? t('active') : t('idle')}</td>
+              <td className="table-actions" data-label={t('actions')}>
                 {editingVisitId === visit.id ? (
                   <>
                     <button
@@ -1691,10 +1774,10 @@ export default function App() {
               <tbody>
                 {pulses.map((pulse) => (
                   <tr key={pulse.id}>
-                    <td>{pulse.plate}</td>
-                    <td>{formatNumber(pulse.amount)}</td>
-                    <td>{new Date(pulse.created_at).toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU')}</td>
-                    <td className="table-actions">
+                    <td data-label={t('plateNumber')}>{pulse.plate}</td>
+                    <td data-label={t('bonus')}>{formatNumber(pulse.amount)}</td>
+                    <td data-label={t('date')}>{new Date(pulse.created_at).toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU')}</td>
+                    <td className="table-actions" data-label={t('actions')}>
                       {pulse.refunded_at ? (
                         <span className="confirmed-status">{t('refunded')}</span>
                       ) : (
@@ -1796,11 +1879,11 @@ export default function App() {
         </div>
         <nav>
           {([
-            ['dashboard', t('dashboard'), '⌂'],
-            ['cars', t('cars'), '◉'],
-            ['visits', t('visits'), '↻'],
-            ['bonus', t('bonus'), '✦'],
-            ['cameras', t('cameras'), '▣'],
+            ['dashboard', t('dashboard'), 'home'],
+            ['cars', t('cars'), 'car'],
+            ['visits', t('visits'), 'visits'],
+            ['bonus', t('bonus'), 'bonus'],
+            ['cameras', t('cameras'), 'camera'],
           ] as const).map(([tab, label, icon]) => (
             <button
               key={tab}
@@ -1809,7 +1892,7 @@ export default function App() {
               aria-current={activeTab === tab ? 'page' : undefined}
               onClick={() => setActiveTab(tab)}
             >
-              <span className="nav-icon" aria-hidden="true">{icon}</span>
+              <Icon name={icon} />
               {label}
             </button>
           ))}
@@ -1821,7 +1904,6 @@ export default function App() {
           <div className="topbar-title">
             <p className="eyebrow">{t('subtitle')}</p>
             <h2>{t(pageTitleKeys[activeTab])}</h2>
-            <p className="active-box-label">{t('selected')}: {selectedBoxName}</p>
           </div>
           <div className="topbar-actions">
             <label className="visually-hidden" htmlFor="box-select">{t('selectedBox')}</label>
