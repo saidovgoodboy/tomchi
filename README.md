@@ -151,6 +151,9 @@ GitHub Actions'ni yoqmoqchi bo'lsangiz, `gh auth refresh -s workflow` bilan toke
 - `GET /api/detections/{id}/image`, `GET /api/boxes/{box_id}/live-frame` — admin Bearer token talab qiladi
 - `GET /api/display`, `POST /api/bonus/press`, `POST /api/detect-image`, `POST /api/boxes/{box_id}/live-frame` — `X-Device-Key` talab qiladi
 - `GET /api/pulses`, `POST /api/pulses/{id}/refund` — admin Bearer token talab qiladi (impulslar tarixi va qaytarish)
+- `GET /api/reports/daily?date=YYYY-MM-DD` — kunlik hisobot (kelishlar, mashinalar, bonus, impulslar); sana berilmasa mahalliy bugungi kun
+- `GET /api/visits/export.csv?from=YYYY-MM-DD&to=YYYY-MM-DD` — kelishlarni CSV ko'rinishida yuklab olish
+- `GET /api/logs` — oxirgi admin/qurilma hodisalari (audit)
 - `GET /health` — `database_ok` maydoni baza holatini ko'rsatadi
 
 Box qurilmalari so'rovda `X-Box-Id` header yuboradi. Bonus sozlamalari, boxlar, mashinalar va kelishlar SQLite'da saqlanadi. DB fayli: `backend/database/tomchi.db`; uni muntazam zaxiralang.
@@ -161,6 +164,8 @@ Visits sahifasida raqamni tahrirlash faqat tanlangan kelishga ta'sir qiladi; Car
 ## Xavfsizlik va bonus qoidalari
 
 Admin panel alohida `ADMIN_USERNAME`/`ADMIN_PASSWORD` bilan kiradi va muddati tugaydigan Bearer token ishlatadi; token brauzer sessiyasida saqlanadi. Sessiya muddati tugasa panel buni alohida xabar bilan ko'rsatadi va qayta kirishni so'raydi.
+
+Dashboard'da bugungi kun hisoboti (kelishlar, mashinalar, berilgan bonus, impulslar) va Visits sahifasida CSV yuklab olish tugmasi bor. Kunlik hisobot chegaralari `REPORT_TIMEZONE_OFFSET_MINUTES` (standart `300`, ya'ni UTC+5) bo'yicha hisoblanadi.
 
 Panelda pulga ta'sir qiladigan amallar tasdiqlash bilan bajariladi: raqamni qo'lda kiritish, kelish raqamini tahrirlash, box qo'shish va test rejimini tugatish. Sozlamalar serverdan yuklanmaguncha "Saqlash" tugmasi bloklanadi, shunda tasodifan standart qiymatlar bilan bonus siyosati bosib ketilmaydi. Qurilmalar faqat `X-Device-Key` bilan hardware API'larga kiradi. Backendda kalit yoki admin credential'lar uchun standart/demo qiymat yo'q; `.env` ni sozlamasdan hardware API'lardan foydalanib bo'lmaydi. CORS ruxsat etilgan admin manzillari `ADMIN_ORIGINS` orqali beriladi.
 

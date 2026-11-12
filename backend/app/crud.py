@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import date, datetime, timedelta
 import re
 
 from sqlalchemy import func, or_
@@ -632,3 +632,63 @@ def process_plate_detection(db: Session, plate: str, box_id: str = DEFAULT_BOX_I
         "box_id": box.id,
         "visit_id": visit.id,
     }
+
+def day_bounds(day: date, offset_minutes: int) -> tuple[datetime, datetime]:
+    """Mahalliy kunda boshlanish/tugashni naive UTC ga o'giradi."""
+    offset = timedelta(minutes=offset_minutes)
+    start_local = datetime(day.year, day.month, day.day) 
+    return start_local - offset, start_local + timedelta(days=1) - offset
+
+
+def daily_report(db: Session, day: date, offset_minutes: int = 300) -> dict:
+    start, end = day_bounds(day, offset_minutes)
+    visits = db.query(Visit).filter(Visit.created_at >= start, Visit.created_at < end).all()
+    pulses = (
+        db.query(BonusPulse)
+        .filter(BonusPulse.created_at >= start, BonusPulse.created_at < end)
+        .all()
+    )
+    refunded = [pulse for pulse in pulses if pulse.refunded_at is not None]
+    return {
+        "date": day.isoformat(),
+        "visits": len(visits),
+        "cars": len({visit.car_id for visit in visits}),
+        "bonus_awarded": sum(visit.bonus_total for visit in visits),
+        "bonus_left": sum(visit.bonus_left for visit in visits),
+        "active_bonus": sum(1 for visit in visits if visit.is_active_bonus),
+        "pulses": len(pulses),
+        "pulses_amount": sum(pulse.amount for pulse in pulses),
+        "refunded": len(refunded),
+        "refunded_amount": sum(pulse.amount for pulse in refunded),
+    }
+
+
+def export_visits_csv(db: Session, start: datetime, end: datetime, offset_minutes: int = 300) -> str:
+    visits = (
+        db.query(Visit)
+        .filter(Visit.created_at >= start, Visit.created_at < end)
+        .order_by(Visit.created_at.asc())
+        .all()
+    )
+    offset = timedelta(minutes=offset_minutes)
+    lines = ["plate,visit_no,box_id,created_at,bonus_total,bonus_left,is_active_bonus"]
+    for visit in visits:
+        local_time = (visit.created_at + offset).strftime("%Y-%m-%d %H:%M:%S")
+        lines.append(
+            f"{visit_plate(visit)},{visit.visit_no},{visit.box_id or ''},{local_time},"
+            f"{visit.bonus_total},{visit.bonus_left},{int(bool(visit.is_active_bonus))}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def list_recent_logs(db: Session, limit: int = 50) -> list[dict]:
+    logs = db.query(DeviceLog).order_by(DeviceLog.created_at.desc(), DeviceLog.id.desc()).limit(limit).all()
+    return [
+        {
+            "id": entry.id,
+            "event": entry.event,
+            "payload": entry.payload,
+            "created_at": iso_utc(entry.created_at),
+        }
+        for entry in logs
+    ]

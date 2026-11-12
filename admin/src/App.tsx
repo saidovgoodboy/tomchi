@@ -83,6 +83,12 @@ const copy = {
     search: 'Qidirish',
     loadMore: 'Yana yuklash',
     searchPlate: 'Raqam bo‘yicha qidirish',
+    downloadCsv: 'CSV yuklab olish',
+    todayReport: 'Bugungi hisobot',
+    todayVisits: 'Kelishlar',
+    todayCars: 'Mashinalar',
+    todayBonus: 'Berilgan bonus',
+    todayPulses: 'Impulslar',
     active: 'Faol',
     idle: 'Faol emas',
     save: 'Saqlash',
@@ -224,6 +230,12 @@ const copy = {
     search: 'Поиск',
     loadMore: 'Загрузить ещё',
     searchPlate: 'Поиск по номеру',
+    downloadCsv: 'Скачать CSV',
+    todayReport: 'Отчёт за сегодня',
+    todayVisits: 'Визиты',
+    todayCars: 'Автомобили',
+    todayBonus: 'Выдано бонусов',
+    todayPulses: 'Импульсы',
     active: 'Активен',
     idle: 'Неактивен',
     save: 'Сохранить',
@@ -375,6 +387,19 @@ type DetectionRow = {
   frame_count: number;
   created_at: string;
   image_url: string;
+};
+
+type DailyReport = {
+  date: string;
+  visits: number;
+  cars: number;
+  bonus_awarded: number;
+  bonus_left: number;
+  active_bonus: number;
+  pulses: number;
+  pulses_amount: number;
+  refunded: number;
+  refunded_amount: number;
 };
 
 type PulseRow = {
@@ -600,6 +625,7 @@ export default function App() {
   const [appliedVisitSearch, setAppliedVisitSearch] = useState('');
   const [visitLimit, setVisitLimit] = useState(10);
   const [carLimit, setCarLimit] = useState(10);
+  const [report, setReport] = useState<DailyReport | null>(null);
   const [refundingId, setRefundingId] = useState<number | null>(null);
   const activeBoxRef = useRef(activeBoxId);
   activeBoxRef.current = activeBoxId;
@@ -872,6 +898,21 @@ export default function App() {
   }, [visitSearch]);
 
   useEffect(() => {
+    if (!authToken || activeTab !== 'dashboard') return;
+    let active = true;
+    request<DailyReport>('/api/reports/daily')
+      .then((data) => {
+        if (active) setReport(data);
+      })
+      .catch((error) => {
+        if (active) console.error(error);
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeTab, authToken]);
+
+  useEffect(() => {
     // Box almashganda oldingi box ma'lumotlari ko'rinib qolmasin.
     setVisits([]);
     setDetections([]);
@@ -1109,6 +1150,24 @@ export default function App() {
     }
   };
 
+  const handleDownloadCsv = async () => {
+    try {
+      const response = await apiFetch('/api/visits/export.csv');
+      if (!response.ok) throw new Error(`${t('requestFailed')} (${response.status})`);
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'tomchi-visits.csv';
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t('requestFailed'));
+    }
+  };
+
   const handleLogin = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setLoginPending(true);
@@ -1172,6 +1231,16 @@ export default function App() {
           <label>{t('activeBonus')}</label>
           <strong>{formatNumber(stats?.active_bonus_count ?? 0)}</strong>
         </div>
+      </section>
+
+      <section className="panel">
+        <h3>{t('todayReport')}{report ? ` · ${report.date}` : ''}</h3>
+        <ul className="simple-list">
+          <li>{t('todayVisits')}: <strong>{formatNumber(report?.visits ?? 0)}</strong></li>
+          <li>{t('todayCars')}: <strong>{formatNumber(report?.cars ?? 0)}</strong></li>
+          <li>{t('todayBonus')}: <strong>{formatNumber(report?.bonus_awarded ?? 0)} so‘m</strong></li>
+          <li>{t('todayPulses')}: <strong>{formatNumber(report?.pulses ?? 0)}</strong> ({formatNumber(report?.pulses_amount ?? 0)} so‘m)</li>
+        </ul>
       </section>
 
       <section className="split-layout">
@@ -1244,6 +1313,9 @@ export default function App() {
           placeholder={t('searchPlate')}
           aria-label={t('searchPlate')}
         />
+        <button className="table-action" type="button" onClick={handleDownloadCsv}>
+          {t('downloadCsv')}
+        </button>
       </div>
       <p className="settings-hint">{t('visitEditHint')}</p>
       <div className="table-wrap">

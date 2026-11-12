@@ -858,6 +858,36 @@ class AuthAndBonusRulesTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_daily_report_and_csv_export(self):
+        self._seed_three_visits()
+        headers = self._admin_headers()
+
+        report = self.client.get("/api/reports/daily?date=2026-11-12", headers=headers)
+        self.assertEqual(report.status_code, 200)
+        payload = report.json()
+        self.assertEqual(payload["date"], "2026-11-12")
+        self.assertEqual(payload["visits"], 3)
+        self.assertEqual(payload["cars"], 3)
+
+        exported = self.client.get(
+            "/api/visits/export.csv?from=2026-11-12&to=2026-11-12",
+            headers=headers,
+        )
+        self.assertEqual(exported.status_code, 200)
+        self.assertIn("text/csv", exported.headers["content-type"])
+        lines = exported.text.strip().splitlines()
+        self.assertEqual(len(lines), 4)
+        self.assertTrue(lines[0].startswith("plate,visit_no"))
+        self.assertIn("01A123BC", exported.text)
+
+    def test_report_rejects_invalid_dates(self):
+        headers = self._admin_headers()
+        self.assertEqual(self.client.get("/api/reports/daily?date=12-11-2026", headers=headers).status_code, 400)
+        self.assertEqual(
+            self.client.get("/api/visits/export.csv?from=2026-11-13&to=2026-11-12", headers=headers).status_code,
+            400,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

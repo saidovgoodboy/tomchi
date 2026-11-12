@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+from datetime import date, timedelta
 import logging
 import time
 from typing import Literal
@@ -32,6 +33,9 @@ from app.crud import (
     DEFAULT_BOX_NAME,
     consume_box_test_pulse,
     create_box,
+    daily_report,
+    day_bounds,
+    export_visits_csv,
     ensure_box,
     finish_box_test,
     get_box_test_status,
@@ -41,6 +45,7 @@ from app.crud import (
     is_valid_plate,
     list_boxes,
     list_recent_cars,
+    list_recent_logs,
     list_recent_pulses,
     list_recent_visits,
     press_bonus,
@@ -495,6 +500,60 @@ def api_pulses(
 ):
     require_admin_token(authorization)
     return list_recent_pulses(db, limit=limit, box_id=box_id)
+
+
+@app.get("/api/reports/daily")
+def api_daily_report(
+    day: str | None = Query(default=None, alias="date"),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    try:
+        target = date.fromisoformat(day) if day else (
+            utcnow() + timedelta(minutes=settings.report_timezone_offset_minutes)
+        ).date()
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date, expected YYYY-MM-DD") from exc
+    return daily_report(db, target, settings.report_timezone_offset_minutes)
+
+
+@app.get("/api/visits/export.csv")
+def api_export_visits(
+    date_from: str | None = Query(default=None, alias="from"),
+    date_to: str | None = Query(default=None, alias="to"),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    offset = timedelta(minutes=settings.report_timezone_offset_minutes)
+    today = (utcnow() + offset).date()
+    try:
+        first = date.fromisoformat(date_from) if date_from else today
+        last = date.fromisoformat(date_to) if date_to else today
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid date, expected YYYY-MM-DD") from exc
+    if last < first:
+        raise HTTPException(status_code=400, detail="'to' must not be earlier than 'from'")
+    start, _ = day_bounds(first, settings.report_timezone_offset_minutes)
+    _, end = day_bounds(last, settings.report_timezone_offset_minutes)
+    csv_text = export_visits_csv(db, start, end, settings.report_timezone_offset_minutes)
+    filename = f"tomchi-visits-{first.isoformat()}_{last.isoformat()}.csv"
+    return Response(
+        content=csv_text,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/logs")
+def api_logs(
+    limit: int = Query(50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    return list_recent_logs(db, limit=limit)
 
 
 @app.post("/api/pulses/{pulse_id}/refund")

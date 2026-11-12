@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     admin_origins: str = "http://localhost:5173,http://127.0.0.1:5173"
     allowed_hosts: str = ""
     port: int = 8000
+    report_timezone_offset_minutes: int = 300
     bonus_amount: int = 20000
     bonus_per_press: int = 5000
     storage_dir: Path = Path(__file__).resolve().parents[1] / "storage"
