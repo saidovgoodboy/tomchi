@@ -124,6 +124,26 @@ Har bir apparat impulsi `1 000 so'm` deb hisoblanadi. Server per-press summasida
 
 Production rejimida API dokumentatsiyasi o'chadi, ruxsat etilmagan Host bloklanadi va login urinishlari IP bo'yicha cheklanadi. Hozirgi konfiguratsiya namunalari public xizmatni tayyorlaydi; domen/DNS va tashqi tarmoq sozlamalarisiz panelga internetdan ulanish yoqilmaydi.
 
+## Tailscale orqali masofadan kirish (tailnet)
+
+Admin panelni domen va public IP'siz, faqat o'z qurilmalaringizdan ko'rish uchun Tailscale ishlatiladi. Bu usul CGNAT ortidagi uy internetida ham ishlaydi va panelni internetga chiqarmaydi.
+
+1. Serverda Tailscale'ni o'rnatib, hisobingiz bilan ulang (`tailscale up`). Telefon yoki noutbukni ham **shu tailnet**ga qo'shing.
+2. `tailscale ip -4` bilan serverning `100.x.y.z` manzilini oling; `tailscale status` orqali qaysi qurilmalar ulanganini tekshiring.
+3. `.env` da `ADMIN_ORIGINS` ga `http://100.x.y.z:5173` ni qo'shing, mavjud manzillarni o'chirmang.
+4. Backendni `--host 0.0.0.0 --port 8000` bilan ishga tushiring (3-bo'limdagidek).
+5. `deploy/run-admin-tailnet.sh` ni ishga tushiring. Skript tailscale IP'si tayyor bo'lishini kutadi, `admin/` papkasiga o'tadi va Vite dev serverni shu IP'da `5173` portda ochadi.
+6. Telefon brauzerida `http://100.x.y.z:5173` ni oching va `.env` dagi `ADMIN_USERNAME`/`ADMIN_PASSWORD` bilan kiring.
+
+Eslatmalar:
+
+- Skript `npm` ni `PATH`dan topadi; topilmasa, ichidagi nvm zaxira yo'lini ishlatadi. Node versiyasini almashtirsangiz ham skript ishlayveradi.
+- `5173` port band bo'lsa, Vite keyingi bo'sh portni oladi — log'dagi `Network:` qatoridagi manzilni ishlating va `.env` dagi `ADMIN_ORIGINS` ga o'sha portni qo'shing.
+- Dev rejimida admin panel API manzilini sahifa ochilgan host nomidan oladi, shuning uchun backend `0.0.0.0` da tinglashi kifoya; `VITE_API_BASE` shart emas.
+- Tailnet'ga ulangan har bir qurilma 8000-portdagi backend'ga ham yeta oladi. `DEVICE_KEY` va admin parolini bo'sh qoldirmang.
+- `tailscale funnel` ataylab yoqilmasa, panel internetdan ko'rinmaydi. Doimiy public HTTPS kerak bo'lsa Caddy + DuckDNS variantidan foydalaning.
+- Tailscale — test va masofadan kirish uchun qulay yo'l; mijoz uchun doimiy xizmat ko'rsatishda public HTTPS konfiguratsiyasi afzal.
+
 ## 7. Mahalliy ishlash jarayoni
 
 1. Backendni ishga tushiring.

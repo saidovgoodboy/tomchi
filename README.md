@@ -7,6 +7,7 @@ Tomchi — avtomoyka uchun bonus tizimi. Backend bir nechta boxni boshqaradi: av
 - `backend/` — FastAPI server, SQLite ma'lumotlar bazasi va biznes logika
 - `admin/` — React + Vite admin panel
 - `hardware/` — ESP32-CAM va panel controller uchun Arduino skretchlari
+- `deploy/` — systemd, Caddy, DuckDNS va Tailscale uchun namunaviy konfiguratsiyalar
 - `docs/` — qo'shimcha hujjatlar
 
 ## Tez boshlash
@@ -69,6 +70,37 @@ Open: http://localhost:5173
 DuckDNS ishlatsangiz, `deploy/duckdns.env.example` dagi qiymatlarni o'zingizning token bilan `/etc/tomchi/duckdns.env` fayliga kiriting, updater script/unit/timer namunalari o'rnatib `tomchi-duckdns.timer` ni yoqing. Tokenni chatga yoki GitHub'ga yubormang. `tomchi.duckdns.org` domeni `ADMIN_ORIGINS`, `ALLOWED_HOSTS` va Caddyfile'da ishlatilishi kerak.
 
 Production rejimida `/docs`, `/redoc` va OpenAPI schema o'chadi, noto'g'ri `Host` headerlar bloklanadi, login urinishlari IP bo'yicha cheklanadi. ESP32'lar domenni HTTPS bilan ishlatishi uchun `SERVER_URL` ni `https://your-subdomain.duckdns.org` qiling va `SERVER_ROOT_CA` ga shu ACME sertifikatiga mos ishonchli CA sertifikatini kiriting.
+
+## Tailscale orqali kirish (tailnet)
+
+Admin panelni public internetga chiqarmasdan, faqat o'z qurilmalaringiz orasida ko'rish uchun Tailscale ishlatiladi. Bu usulda domen, port-forwarding yoki VPS shart emas — CGNAT ortidagi uy internetida ham ishlaydi. Shu maqsad uchun `deploy/run-admin-tailnet.sh` qo'shilgan.
+
+1. Serverda ham, telefonda/noutbukda ham Tailscale o'rnatilgan va ikkalasi **bitta tailnet**ga ulangan bo'lsin. Serverning tailnet manzilini oling:
+
+   ```bash
+   tailscale ip -4      # masalan 100.115.157.5
+   tailscale status     # qaysi qurilmalar ulanganini ko'rsatadi
+   ```
+
+2. `.env` dagi `ADMIN_ORIGINS` ga shu IP bilan panel manzilini qo'shing (mavjud manzillarni o'chirmang):
+
+   ```
+   ADMIN_ORIGINS=http://localhost:5173,http://127.0.0.1:5173,http://100.115.157.5:5173
+   ```
+
+3. Backendni tailnet'dan ko'rinadigan qilib ishga tushiring — 3-qadamdagidek `--host 0.0.0.0 --port 8000`. Admin panel dev rejimida API manzilini sahifa ochilgan host nomidan oladi (`VITE_API_BASE` berilmagan bo'lsa), shuning uchun alohida sozlash kerak emas.
+
+4. Admin panelni tailnet IP'siga bog'lab ishga tushiring:
+
+   ```bash
+   /home/saidov/tomchi/deploy/run-admin-tailnet.sh
+   ```
+
+   Skript `tailscale ip -4` javobini kutadi, `admin/` papkasiga o'tadi va Vite'ni faqat shu IP'da `5173` portda ochadi. `npm` `PATH`dan topiladi (topilmasa skriptdagi nvm zaxira yo'li ishlatiladi). `5173` band bo'lsa, Vite keyingi bo'sh portni oladi — log'dagi `Network:` manzilini ishlating.
+
+5. Telefon yoki boshqa qurilmadan oching: `http://100.115.157.5:5173`, so'ng `.env` dagi admin login bilan kiring.
+
+Tailnet private: panel faqat tailnet'ga ulangan qurilmalardan ko'rinadi. `tailscale funnel` yoqilmagan bo'lsa, panel internetdan ochilmaydi; public HTTPS kerak bo'lsa yuqoridagi Caddy/DuckDNS yo'lidan foydalaning. Bu rejimda backendning 8000-porti ham tailnet ichida ochiq bo'ladi, shuning uchun `DEVICE_KEY` va admin parolini bo'sh yoki kuchsiz qoldirmang.
 
 ### 5) Hardware skriptlarini yuklash
 
