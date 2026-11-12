@@ -7,7 +7,7 @@ Tomchi — avtomoyka uchun bonus tizimi. Backend bir nechta boxni boshqaradi: av
 - `backend/` — FastAPI server, SQLite ma'lumotlar bazasi va biznes logika
 - `admin/` — React + Vite admin panel
 - `hardware/` — ESP32-CAM va panel controller uchun Arduino skretchlari
-- `deploy/` — systemd, Caddy, DuckDNS va Tailscale uchun namunaviy konfiguratsiyalar
+- `deploy/` — systemd, Caddy, DuckDNS, Tailscale va zaxira nusxa uchun namunalar
 - `docs/` — qo'shimcha hujjatlar
 
 ## Tez boshlash
@@ -111,6 +111,7 @@ Tailnet private: panel faqat tailnet'ga ulangan qurilmalardan ko'rinadi. `tailsc
 - Admin panelning Cameras bo'limida OCR taklifi va ishonch foizi ko'rinadi. Admin raqamni tekshirib tasdiqlagandan keyingina visit yaratiladi; OCR xato bo'lsa, raqamni tuzatish mumkin.
 - Panel ESP32 HUB75 P10 displeyida o'zbek lotin yozuvidagi matnni ko'rsatadi (`AVTOMOBIL YO'Q`, `KELISH`, `MUKOFOT`, `SO'M`) va bonus tasdiqlangach GPIO33 orqali impuls chiqaradi. Admin panelda box tanlab, o'sha box uchun faol qutbni (`HIGH`/`LOW`) va impuls davrini (`50`, `100` yoki `200` ms) sozlash mumkin; ESP32 qiymatlarni o'z box ID'si bo'yicha serverdan oladi.
 - Tanlangan davr bitta to'liq impuls sikli bo'lib, signal davrning yarmida faol turadi. GPIO33 ni bill acceptor/main board'ga bevosita ulamang: kirish kuchlanishi va sxema talabiga mos optik ajratilgan yoki level-shifting interfeysdan foydalaning.
+- Quvvat yonganda va reset paytida GPIO33 bir necha millisekund erkin qoladi. Firmware pin'ni birinchi bo'lib `OUTPUT` qilib `LOW` holatga keltiradi, lekin faol-HIGH kirish uchun **tashqi pull-down rezistor** (masalan 10 kΩ) qo'shing — aks holda bill acceptor soxta impuls ko'rishi mumkin.
 - Admin panelning Bonus bo'limida box test rejimini boshlash, 1 000–100 000 so'm oralig'ida test summasi yuborish va testni tugatish mumkin. Test impulslari mijoz bonusidan yechilmaydi; test vaqtida box tugmasi orqali odatiy bonus berilmaydi.
 
 ## API
@@ -122,6 +123,8 @@ Tailnet private: panel faqat tailnet'ga ulangan qurilmalardan ko'rinadi. `tailsc
 - `POST /api/detect`, `POST /api/boxes` — admin Bearer token talab qiladi
 - `GET /api/detections/{id}/image`, `GET /api/boxes/{box_id}/live-frame` — admin Bearer token talab qiladi
 - `GET /api/display`, `POST /api/bonus/press`, `POST /api/detect-image`, `POST /api/boxes/{box_id}/live-frame` — `X-Device-Key` talab qiladi
+- `GET /api/pulses`, `POST /api/pulses/{id}/refund` — admin Bearer token talab qiladi (impulslar tarixi va qaytarish)
+- `GET /health` — `database_ok` maydoni baza holatini ko'rsatadi
 
 Box qurilmalari so'rovda `X-Box-Id` header yuboradi. Bonus sozlamalari, boxlar, mashinalar va kelishlar SQLite'da saqlanadi. DB fayli: `backend/database/tomchi.db`; uni muntazam zaxiralang.
 
@@ -130,9 +133,33 @@ Visits sahifasida raqamni tahrirlash faqat tanlangan kelishga ta'sir qiladi; Car
 
 ## Xavfsizlik va bonus qoidalari
 
-Admin panel alohida `ADMIN_USERNAME`/`ADMIN_PASSWORD` bilan kiradi va muddati tugaydigan Bearer token ishlatadi; token brauzer sessiyasida saqlanadi. Qurilmalar faqat `X-Device-Key` bilan hardware API'larga kiradi. Backendda kalit yoki admin credential'lar uchun standart/demo qiymat yo'q; `.env` ni sozlamasdan hardware API'lardan foydalanib bo'lmaydi. CORS ruxsat etilgan admin manzillari `ADMIN_ORIGINS` orqali beriladi.
+Admin panel alohida `ADMIN_USERNAME`/`ADMIN_PASSWORD` bilan kiradi va muddati tugaydigan Bearer token ishlatadi; token brauzer sessiyasida saqlanadi. Sessiya muddati tugasa panel buni alohida xabar bilan ko'rsatadi va qayta kirishni so'raydi.
+
+Panelda pulga ta'sir qiladigan amallar tasdiqlash bilan bajariladi: raqamni qo'lda kiritish, kelish raqamini tahrirlash, box qo'shish va test rejimini tugatish. Sozlamalar serverdan yuklanmaguncha "Saqlash" tugmasi bloklanadi, shunda tasodifan standart qiymatlar bilan bonus siyosati bosib ketilmaydi. Qurilmalar faqat `X-Device-Key` bilan hardware API'larga kiradi. Backendda kalit yoki admin credential'lar uchun standart/demo qiymat yo'q; `.env` ni sozlamasdan hardware API'lardan foydalanib bo'lmaydi. CORS ruxsat etilgan admin manzillari `ADMIN_ORIGINS` orqali beriladi.
+
+`POST /api/bonus/press` idempotent: qurilma `press_id` yuboradi va tarmoq xatosida aynan shu ID bilan qayta urinadi. Server bir xil `press_id` uchun pulni ikki marta yechmaydi va `duplicate: true` qaytaradi. Panelda yuborilgan impulslar tarixi (`GET /api/pulses`) ko'rinadi; xato yoki nosozlik bo'lsa admin impulsni qaytarishi mumkin (`POST /api/pulses/{id}/refund`) — summa bonus qoldig'iga qaytadi.
 
 Bonus butun moyka uchun bitta bo'ladi va faqat bonus berilgan boxda ishlatiladi. Boshqa avtomobil avvalgi mashinaning 24 soatlik takror aniqlash oynasida kelsa, faol bonus qoldig'i bekor qilinadi; bonus egasi bo'lgan mashinaning takror aniqlanishi uning bonusini bekor qilmaydi.
+
+## Zaxira nusxa va tiklash
+
+Ma'lumotlar bitta SQLite faylida va `backend/storage/` dagi rasmlarda turadi, shuning uchun zaxira oddiy nusxa bilan cheklanmaydi: baza ishlab turganda ham izchil nusxa olish kerak.
+
+```bash
+python3 /home/saidov/tomchi/deploy/backup_tomchi.py --dest /home/saidov/tomchi-backups --keep 14
+```
+
+Skript SQLite `backup` API'sidan foydalanadi, har safar `tomchi-YYYYmmdd-HHMMSS.db` va `storage-YYYYmmdd-HHMMSS.tar.gz` yaratadi, `--keep` kunidan eski nusxalarni o'chiradi. Kunlik avtomatik zaxira uchun `deploy/tomchi-backup.service.example` va `deploy/tomchi-backup.timer.example` namunalarini o'rnating:
+
+```bash
+sudo cp deploy/tomchi-backup.service.example /etc/systemd/system/tomchi-backup.service
+sudo cp deploy/tomchi-backup.timer.example /etc/systemd/system/tomchi-backup.timer
+sudo systemctl daemon-reload
+sudo systemctl enable --now tomchi-backup.timer
+systemctl list-timers tomchi-backup.timer
+```
+
+Tiklash: serverni to'xtatib, oxirgi `tomchi-*.db` faylni `backend/database/tomchi.db` ustiga qo'ying (eski faylni saqlab qo'ying), kerak bo'lsa `storage-*.tar.gz` ni `backend/` ichiga oching, so'ng serverni qayta ishga tushiring. Zaxirani boshqa diskka yoki tashqi nusxaga ham ko'chirib turing: bir diskdagi zaxira disk buzilishidan saqlamaydi.
 
 ## GitHubga yuborish
 

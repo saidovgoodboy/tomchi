@@ -79,8 +79,9 @@ Har bir box uchun kamera va panel ESP32'ga alohida firmware yuklanadi. Ikkala qu
 3. VPS ishlatilsa, ESP32-CAM dagi kabi `SERVER_ROOT_CA` ni kiriting.
 4. `PANEL_WIDTH`, `PANEL_HEIGHT`, `PANEL_CHAIN` va HUB75 `panelPins` qiymatlarini panelingiz xususiyatlariga moslang. Dastlabki qiymatlar bitta 32x16 panel uchun.
 5. `BUTTON_PIN` ni tugmaga ulang (GPIO32 va GND; ichki pull-up ishlatiladi). HUB75 uchun yuqoridagi pin xaritasini wiring'dan oldin tekshiring.
-6. Admin panelning yuqori qismidan box'ni tanlab, Bonus sozlamalarida shu box uchun `Pulse polarity` qiymatini `HIGH` yoki `LOW`, `Pulse frequency` qiymatini `50`, `100` yoki `200 ms` qilib belgilang. ESP32 sozlamalarni o'z `BOX_ID` qiymatiga mos `/api/display` javobidan oladi; o'zgartirish uchun firmware'ni qayta yuklash shart emas. Tanlangan ms qiymati to'liq impuls sikli, faol signal esa uning yarmi davom etadi.
-7. Firmware'ni boxdagi ESP32 DevKit'ga yuklang. Displey server matnini har soniyada oladi va o'zbek lotin yozuvida marquee qilib chiqaradi: `AVTOMOBIL YO'Q`, `KELISH`, `MUKOFOT`, `SO'M`.
+6. GPIO33 uchun faol-HIGH kirish ishlatilsa, tashqi pull-down rezistor (masalan 10 kΩ) qo'shing: quvvat yonganda pin bir necha millisekund erkin qoladi va bill acceptor buni impuls deb o'qishi mumkin. Firmware pin'ni `setup()` ning birinchi qatorida `OUTPUT` + `LOW` qiladi, lekin bu elektr himoyani almashtirmaydi.
+7. Admin panelning yuqori qismidan box'ni tanlab, Bonus sozlamalarida shu box uchun `Pulse polarity` qiymatini `HIGH` yoki `LOW`, `Pulse frequency` qiymatini `50`, `100` yoki `200 ms` qilib belgilang. ESP32 sozlamalarni o'z `BOX_ID` qiymatiga mos `/api/display` javobidan oladi; o'zgartirish uchun firmware'ni qayta yuklash shart emas. Tanlangan ms qiymati to'liq impuls sikli, faol signal esa uning yarmi davom etadi.
+8. Firmware'ni boxdagi ESP32 DevKit'ga yuklang. Displey server matnini har soniyada oladi va o'zbek lotin yozuvida marquee qilib chiqaradi: `AVTOMOBIL YO'Q`, `KELISH`, `MUKOFOT`, `SO'M`.
 
 **Bonus API so'rovi qabul qilingach server bonus summasini yechadi, ESP32 esa qaytgan impulslar sonini GPIO33 orqali chiqaradi.** Bill acceptor/main board'dan qayta aloqa olinmaydi; impuls fizik qabul qilinganini dastur tasdiqlamaydi. GPIO33 ESP32'ning 3.3 V chiqishidir. Qurilmaning kirish kuchlanishi va elektr sxemasi tasdiqlanmagan bo'lsa, GPIO'ni bevosita ulamang; zarur bo'lsa optik izolyatsiya yoki kuchlanish moslashtirgichdan foydalaning.
 
@@ -90,7 +91,8 @@ Har bir box uchun `BOX_ID` admin paneldagi ID bilan aynan bir xil bo'lishi kerak
 
 - `POST /api/detect` ga `{"plate": "01A123BC"}` yuborish orqali test qilinadi.
 - `GET /api/display` orqali ekran matni olinadi.
-- `POST /api/bonus/press` bilan bonus bosish simulyatsiyasi ishlaydi.
+- `POST /api/bonus/press` bilan bonus bosish simulyatsiyasi ishlaydi. `press_id` yuborilsa so'rov idempotent bo'ladi: bir xil ID bilan takroriy so'rov pulni qayta yechmaydi.
+- `GET /api/pulses` yuborilgan impulslar tarixini ko'rsatadi; `POST /api/pulses/{id}/refund` impulsni qaytarib, summani bonus qoldig'iga qo'shadi.
 - `GET /api/boxes` boxlar va har birining joriy bonus holatini qaytaradi.
 - Detection, display va bonus so'rovlari boxni `X-Box-Id` header orqali tanlaydi.
 - `POST /api/detect-image` `image` nomli JPEG multipart faylni, `event_id`, `frame_index` va `frame_count` maydonlari bilan qabul qiladi. Kadrlar Tesseract orqali mahalliy tekshiriladi; har event uchun eng ishonchli raqam taklifi detection bilan saqlanadi.
@@ -143,6 +145,18 @@ Eslatmalar:
 - Tailnet'ga ulangan har bir qurilma 8000-portdagi backend'ga ham yeta oladi. `DEVICE_KEY` va admin parolini bo'sh qoldirmang.
 - `tailscale funnel` ataylab yoqilmasa, panel internetdan ko'rinmaydi. Doimiy public HTTPS kerak bo'lsa Caddy + DuckDNS variantidan foydalaning.
 - Tailscale — test va masofadan kirish uchun qulay yo'l; mijoz uchun doimiy xizmat ko'rsatishda public HTTPS konfiguratsiyasi afzal.
+
+## Zaxira nusxa va tiklash
+
+Baza va arxiv rasmlari bir joyda saqlanadi, shuning uchun zaxira SQLite'ning `backup` API'si orqali olinadi (baza ishlab turganda ham izchil):
+
+```bash
+python3 /home/saidov/tomchi/deploy/backup_tomchi.py --dest /home/saidov/tomchi-backups --keep 14
+```
+
+Har safar `tomchi-YYYYmmdd-HHMMSS.db` va `storage-YYYYmmdd-HHMMSS.tar.gz` yaratiladi; `--keep 14` o'n to'rt kundan eski nusxalarni o'chiradi. Kunlik avtomatik zaxira uchun `deploy/tomchi-backup.service.example` va `deploy/tomchi-backup.timer.example` ni `/etc/systemd/system/` ga o'rnatib, `tomchi-backup.timer` ni yoqing.
+
+Tiklash: serverni to'xtating, oxirgi `tomchi-*.db` nusxani `backend/database/tomchi.db` ustiga qo'ying, kerak bo'lsa `storage-*.tar.gz` ni `backend/` ichiga oching va serverni qayta ishga tushiring. Zaxira nusxani boshqa diskda ham saqlang.
 
 ## 7. Mahalliy ishlash jarayoni
 

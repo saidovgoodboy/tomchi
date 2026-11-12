@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PlateDetectionRequest(BaseModel):
@@ -26,6 +26,16 @@ class DisplayResponse(BaseModel):
 
 class BonusPressRequest(BaseModel):
     plate: str | None = None
+    press_id: str | None = Field(default=None, min_length=1, max_length=64)
+
+    @field_validator("press_id")
+    @classmethod
+    def press_id_is_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not all(char.isalnum() or char in "-_" for char in value):
+            raise ValueError("press_id may only contain letters, digits, '-' and '_'")
+        return value
 
 
 class TestPulseRequest(BaseModel):
@@ -38,6 +48,7 @@ class BonusPressResponse(BaseModel):
     message: str
     amount: int = 0
     pulse_count: int = 0
+    duplicate: bool = False
 
 
 class CarOut(BaseModel):

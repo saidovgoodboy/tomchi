@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import timedelta
 from hashlib import sha256
 from io import BytesIO
 from pathlib import Path
@@ -10,6 +10,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlalchemy.orm import Session
 
 from app.models import DetectionRecord
+from app.timeutil import utcnow
 
 
 def compress_jpeg(data: bytes, max_size: tuple[int, int], quality: int) -> bytes:
@@ -62,7 +63,7 @@ def cleanup_detection_images(
     retention_days: int,
     max_storage_bytes: int,
 ) -> None:
-    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+    cutoff = utcnow() - timedelta(days=retention_days)
     expired = (
         db.query(DetectionRecord)
         .filter(DetectionRecord.created_at < cutoff)

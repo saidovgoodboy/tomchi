@@ -1,9 +1,11 @@
-from datetime import datetime, timedelta
+from datetime import timedelta
 import re
 
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.timeutil import iso_utc, utcnow
 from app.models import (
     AppSetting,
     BonusPulse,
@@ -178,7 +180,7 @@ def queue_box_test_pulse(
         raise ValueError("A test pulse is already waiting for the device")
     state.pending_amount = amount
     state.pending_pulse_count = amount // PULSE_VALUE
-    state.updated_at = datetime.utcnow()
+    state.updated_at = utcnow()
     db.add(DeviceLog(event="test_pulse_queued", payload=f"{box_id}:{amount}"))
     db.commit()
     return get_box_test_status(db, box_id)
@@ -190,7 +192,7 @@ def finish_box_test(db: Session, box_id: str) -> dict[str, bool | int | None]:
         state.is_active = 0
         state.pending_amount = None
         state.pending_pulse_count = None
-        state.updated_at = datetime.utcnow()
+        state.updated_at = utcnow()
         db.commit()
     return get_box_test_status(db, box_id)
 
@@ -208,7 +210,7 @@ def consume_box_test_pulse(db: Session, box_id: str) -> dict[str, bool | int]:
     if state is not None and state.pending_pulse_count is not None:
         state.pending_amount = None
         state.pending_pulse_count = None
-        state.updated_at = datetime.utcnow()
+        state.updated_at = utcnow()
         db.commit()
     return result
 
@@ -265,7 +267,7 @@ def create_or_get_car(db: Session, plate: str) -> Car:
     car = get_car_by_plate(db, plate)
     if car:
         return car
-    car = Car(plate=plate, created_at=datetime.utcnow())
+    car = Car(plate=plate, created_at=utcnow())
     db.add(car)
     db.commit()
     db.refresh(car)
@@ -292,7 +294,7 @@ def expire_active_bonus(db: Session, visit: Visit) -> None:
 
 def create_visit_for_car(db: Session, car: Car, box_id: str) -> Visit:
     last_visit = db.query(Visit).filter(Visit.car_id == car.id).order_by(Visit.created_at.desc()).first()
-    if last_visit and datetime.utcnow() - last_visit.created_at < timedelta(hours=24):
+    if last_visit and utcnow() - last_visit.created_at < timedelta(hours=24):
         active_bonus = (
             db.query(Visit)
             .filter(Visit.is_active_bonus == 1)
@@ -319,7 +321,7 @@ def create_visit_for_car(db: Session, car: Car, box_id: str) -> Visit:
     visit = Visit(
         car_id=car.id,
         box_id=box.id,
-        created_at=datetime.utcnow(),
+        created_at=utcnow(),
         visit_no=visit_no,
         bonus_total=0,
         bonus_left=0,
@@ -374,8 +376,41 @@ def get_display_text(db: Session, box_id: str = DEFAULT_BOX_ID) -> dict:
     }
 
 
-def press_bonus(db: Session, plate: str | None, box_id: str = DEFAULT_BOX_ID) -> dict:
+def _pulse_response(visit: Visit, amount: int, pulse_count: int, message: str, duplicate: bool = False) -> dict:
+    return {
+        "ok": True,
+        "bonus_left": visit.bonus_left,
+        "amount": amount,
+        "pulse_count": pulse_count,
+        "duplicate": duplicate,
+        "message": message,
+    }
+
+
+def find_pulse_by_press_id(db: Session, press_id: str) -> BonusPulse | None:
+    return db.query(BonusPulse).filter(BonusPulse.press_id == press_id).first()
+
+
+def press_bonus(
+    db: Session,
+    plate: str | None,
+    box_id: str = DEFAULT_BOX_ID,
+    press_id: str | None = None,
+) -> dict:
     box = ensure_box(db, box_id)
+
+    # Qurilma javobni olmay qayta yuborsa, pul ikki marta yechilmasin.
+    if press_id:
+        existing = find_pulse_by_press_id(db, press_id)
+        if existing is not None:
+            return _pulse_response(
+                existing.visit,
+                existing.amount,
+                existing.amount // PULSE_VALUE,
+                "Duplicate pulse ignored",
+                duplicate=True,
+            )
+
     test_state = db.get(BoxTestState, box.id)
     if test_state is not None and test_state.is_active:
         return {"ok": False, "bonus_left": 0, "message": "Box is in test mode"}
@@ -398,18 +433,88 @@ def press_bonus(db: Session, plate: str | None, box_id: str = DEFAULT_BOX_ID) ->
         visit.bonus_left = 0
         visit.is_active_bonus = 0
 
-    pulse = BonusPulse(visit_id=visit.id, created_at=datetime.utcnow(), amount=amount)
+    pulse = BonusPulse(
+        visit_id=visit.id,
+        created_at=utcnow(),
+        amount=amount,
+        press_id=press_id,
+    )
     db.add(pulse)
     db.add(DeviceLog(event="bonus_press", payload=f"{box.id}:{visit_plate(visit)}:{amount}"))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # Parallel retry bir xil press_id bilan yozib ulgurgan bo'lishi mumkin.
+        db.rollback()
+        existing = find_pulse_by_press_id(db, press_id) if press_id else None
+        if existing is None:
+            raise
+        return _pulse_response(
+            existing.visit,
+            existing.amount,
+            existing.amount // PULSE_VALUE,
+            "Duplicate pulse ignored",
+            duplicate=True,
+        )
 
+    return _pulse_response(visit, amount, amount // PULSE_VALUE, "Bonus pulse accepted")
+
+
+def list_recent_pulses(db: Session, limit: int = 20, box_id: str | None = None) -> list[dict]:
+    query = db.query(BonusPulse).join(Visit, BonusPulse.visit_id == Visit.id)
+    if box_id:
+        query = query.filter(Visit.box_id == box_id)
+    pulses = query.order_by(BonusPulse.created_at.desc(), BonusPulse.id.desc()).limit(limit).all()
+    return [
+        {
+            "id": pulse.id,
+            "visit_id": pulse.visit_id,
+            "box_id": pulse.visit.box_id,
+            "plate": visit_plate(pulse.visit),
+            "amount": pulse.amount,
+            "created_at": iso_utc(pulse.created_at),
+            "refunded_at": iso_utc(pulse.refunded_at),
+        }
+        for pulse in pulses
+    ]
+
+
+def refund_pulse(db: Session, pulse_id: int) -> dict:
+    pulse = db.get(BonusPulse, pulse_id)
+    if pulse is None:
+        raise ValueError("Pulse not found")
+    if pulse.refunded_at is not None:
+        raise ValueError("Pulse is already refunded")
+
+    visit = pulse.visit
+    other_active = (
+        db.query(Visit)
+        .filter(Visit.is_active_bonus == 1, Visit.id != visit.id)
+        .first()
+    )
+    if not visit.is_active_bonus and other_active is not None:
+        # Bonus boshqa mashinaning kelishi bilan bekor qilingan; qaytarish uni
+        # qayta tiklab, bir vaqtda ikkita faol bonus yaratmasligi kerak.
+        raise ValueError("Bonus already expired by a newer visit")
+
+    visit.bonus_left += pulse.amount
+    if visit.bonus_left > visit.bonus_total:
+        visit.bonus_left = visit.bonus_total
+    if visit.bonus_expired >= pulse.amount:
+        visit.bonus_expired -= pulse.amount
+    if visit.bonus_left > 0:
+        visit.is_active_bonus = 1
+    pulse.refunded_at = utcnow()
+    db.add(DeviceLog(event="bonus_refunded", payload=f"{visit.box_id}:{visit_plate(visit)}:{pulse.amount}"))
+    db.commit()
     return {
         "ok": True,
+        "pulse_id": pulse.id,
+        "amount": pulse.amount,
         "bonus_left": visit.bonus_left,
-        "amount": amount,
-        "pulse_count": amount // PULSE_VALUE,
-        "message": "Bonus pulse accepted",
+        "refunded_at": iso_utc(pulse.refunded_at),
     }
+
 
 
 def get_stats(db: Session) -> dict:
@@ -450,7 +555,7 @@ def list_recent_visits(db: Session, limit: int = 10, box_id: str | None = None):
                 "id": visit.id,
                 "plate": visit_plate(visit),
                 "visit_no": visit.visit_no,
-                "created_at": visit.created_at.isoformat(),
+                "created_at": iso_utc(visit.created_at),
                 "bonus_total": visit.bonus_total,
                 "bonus_left": visit.bonus_left,
                 "is_active_bonus": bool(visit.is_active_bonus),
@@ -467,7 +572,7 @@ def list_recent_cars(db: Session, limit: int = 10):
         {
             "id": car.id,
             "plate": car.plate,
-            "created_at": car.created_at.isoformat(),
+            "created_at": iso_utc(car.created_at),
             "visit_count": db.query(Visit).filter(Visit.car_id == car.id).count(),
         }
         for car in cars

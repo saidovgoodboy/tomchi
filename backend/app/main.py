@@ -1,5 +1,4 @@
 from contextlib import asynccontextmanager
-from datetime import datetime
 import logging
 import time
 from typing import Literal
@@ -42,12 +41,14 @@ from app.crud import (
     is_valid_plate,
     list_boxes,
     list_recent_cars,
+    list_recent_pulses,
     list_recent_visits,
     press_bonus,
     queue_box_test_pulse,
     start_box_test,
     normalize_plate,
     process_plate_detection,
+    refund_pulse,
     update_bonus_settings,
 )
 from app.db import Base, SessionLocal, engine, get_db
@@ -58,6 +59,7 @@ from app.image_store import (
     save_live_frame,
 )
 from app.models import DetectionRecord, DeviceLog, Visit, WashBox
+from app.timeutil import iso_utc, utcnow
 from app.schemas import (
     BonusPressRequest,
     BonusPressResponse,
@@ -88,6 +90,18 @@ async def lifespan(app: FastAPI):
         if "ocr_confidence" not in columns:
             with engine.begin() as connection:
                 connection.execute(text("ALTER TABLE detections ADD COLUMN ocr_confidence FLOAT"))
+        columns = {column["name"] for column in inspect(engine).get_columns("bonus_pulses")}
+        with engine.begin() as connection:
+            if "press_id" not in columns:
+                connection.execute(text("ALTER TABLE bonus_pulses ADD COLUMN press_id VARCHAR(64)"))
+            if "refunded_at" not in columns:
+                connection.execute(text("ALTER TABLE bonus_pulses ADD COLUMN refunded_at DATETIME"))
+            connection.execute(
+                text(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS ix_bonus_pulses_press_id "
+                    "ON bonus_pulses (press_id)"
+                )
+            )
     with SessionLocal() as db:
         if db.get(WashBox, DEFAULT_BOX_ID) is None:
             db.add(WashBox(id=DEFAULT_BOX_ID, name=DEFAULT_BOX_NAME))
@@ -185,10 +199,17 @@ class AdminLogin(BaseModel):
 
 
 @app.get("/health")
-def health():
+def health(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        database_ok = True
+    except Exception:  # noqa: BLE001 - health endpoint reports instead of crashing
+        logger.exception("Health check database query failed")
+        database_ok = False
     return {
-        "ok": True,
+        "ok": database_ok,
         "service": "tomchi-backend",
+        "database_ok": database_ok,
         "anpr_enabled": settings.anpr_enabled,
         "anpr_available": settings.anpr_enabled and is_ocr_available(settings.anpr_tesseract_cmd),
     }
@@ -367,7 +388,7 @@ def api_update_visit_plate(
     db.query(DetectionRecord).filter(DetectionRecord.visit_id == visit.id).update(
         {
             DetectionRecord.plate: plate,
-            DetectionRecord.updated_at: datetime.utcnow(),
+            DetectionRecord.updated_at: utcnow(),
         },
         synchronize_session=False,
     )
@@ -433,10 +454,34 @@ def api_bonus_press(
 ):
     require_device_key(x_device_key)
     try:
-        result = press_bonus(db, payload.plate, x_box_id)
+        result = press_bonus(db, payload.plate, x_box_id, payload.press_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return BonusPressResponse(**result)
+
+
+@app.get("/api/pulses")
+def api_pulses(
+    limit: int = Query(20, ge=1, le=100),
+    box_id: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    return list_recent_pulses(db, limit=limit, box_id=box_id)
+
+
+@app.post("/api/pulses/{pulse_id}/refund")
+def api_refund_pulse(
+    pulse_id: int,
+    db: Session = Depends(get_db),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+):
+    require_admin_token(authorization)
+    try:
+        return refund_pulse(db, pulse_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
 @app.post("/api/detect-image")
@@ -487,8 +532,8 @@ async def api_detect_image(
                 image_key=uuid4().hex,
                 frame_index=-1,
                 frame_count=frame_count,
-                created_at=datetime.utcnow(),
-                updated_at=datetime.utcnow(),
+                created_at=utcnow(),
+                updated_at=utcnow(),
             )
             db.add(detection)
             db.flush()
@@ -497,7 +542,7 @@ async def api_detect_image(
             save_detection_image(settings.storage_dir, detection.image_key, content)
             detection.frame_index = frame_index
             detection.frame_count = frame_count
-            detection.updated_at = datetime.utcnow()
+            detection.updated_at = utcnow()
             db.add(DeviceLog(
                 event="image_received",
                 payload=f"{box.id}:{detection.id}:{frame_index + 1}/{frame_count}",
@@ -639,7 +684,7 @@ def list_detections(
             "status": item.status,
             "frame_index": item.frame_index,
             "frame_count": item.frame_count,
-            "created_at": item.created_at.isoformat(),
+            "created_at": iso_utc(item.created_at),
             "image_url": f"/api/detections/{item.id}/image",
         }
         for item in detections
@@ -692,7 +737,7 @@ def correct_detection_plate(
         detection.plate = plate
         detection.visit_id = result["visit_id"]
         detection.status = "confirmed"
-        detection.updated_at = datetime.utcnow()
+        detection.updated_at = utcnow()
         db.commit()
     return {
         "ok": True,

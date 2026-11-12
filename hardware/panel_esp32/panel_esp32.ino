@@ -163,43 +163,67 @@ void fetchDisplay() {
 }
 
 void requestBonus() {
-  HTTPClient http;
-  if (!beginRequest(http, "/api/bonus/press")) {
-    Serial.println("Server unavailable; bonus was not authorized");
-    return;
-  }
+  // Bir bosish uchun bitta press_id: tarmoq xatosida qayta urinsak ham
+  // server pulni ikki marta yechmaydi (idempotentlik).
+  char pressId[32];
+  snprintf(pressId, sizeof(pressId), "p-%08lx-%08lx",
+           static_cast<unsigned long>(esp_random()),
+           static_cast<unsigned long>(millis()));
+  const String body = String("{\"press_id\":\"") + pressId + "\"}";
 
-  http.addHeader("Content-Type", "application/json");
-  const int status = http.POST("{}");
-  if (status >= 200 && status < 300) {
-    JsonDocument response;
-    const String body = http.getString();
-    const DeserializationError error = deserializeJson(response, body);
-    if (!error && response["ok"] == true) {
-      const int amount = response["amount"] | 0;
-      const int pulseCount = response["pulse_count"] | 0;
-      const int bonusLeft = response["bonus_left"] | 0;
-      Serial.printf("Bonus approved: %d so'm, emitting %d pulses (%s active, %u ms period)\n",
-                    amount,
-                    pulseCount,
-                    pulseActiveHigh ? "HIGH" : "LOW",
-                    static_cast<unsigned>(pulseFrequencyMs));
-      emitPulses(pulseCount);
-      if (bonusLeft > 0) {
-        setDisplay(displayRemainingLabel + ": " + String(bonusLeft) + " " + displayCurrencyLabel, true);
-      } else {
-        setDisplay(displayFinishedText, false);
-      }
-    } else if (!error) {
-      const char* message = response["message"] | "Bonus not available";
-      Serial.printf("Bonus refused: %s\n", message);
-    } else {
-      Serial.printf("Bonus response parse failed: %s\n", error.c_str());
+  for (uint8_t attempt = 0; attempt < 3; attempt++) {
+    HTTPClient http;
+    if (!beginRequest(http, "/api/bonus/press")) {
+      Serial.println("Server unavailable; bonus was not authorized");
+      return;
     }
-  } else {
-    Serial.printf("Bonus request failed: HTTP %d; no physical impulses emitted\n", status);
+
+    http.addHeader("Content-Type", "application/json");
+    const int status = http.POST(body);
+    if (status >= 200 && status < 300) {
+      JsonDocument response;
+      const String payload = http.getString();
+      const DeserializationError error = deserializeJson(response, payload);
+      if (!error && response["ok"] == true) {
+        const int amount = response["amount"] | 0;
+        const int pulseCount = response["pulse_count"] | 0;
+        const int bonusLeft = response["bonus_left"] | 0;
+        const bool duplicate = response["duplicate"] | false;
+        Serial.printf("Bonus approved: %d so'm, emitting %d pulses (%s active, %u ms period)%s\n",
+                      amount,
+                      pulseCount,
+                      pulseActiveHigh ? "HIGH" : "LOW",
+                      static_cast<unsigned>(pulseFrequencyMs),
+                      duplicate ? " [duplicate]" : "");
+        emitPulses(pulseCount);
+        if (bonusLeft > 0) {
+          setDisplay(displayRemainingLabel + ": " + String(bonusLeft) + " " + displayCurrencyLabel, true);
+        } else {
+          setDisplay(displayFinishedText, false);
+        }
+      } else if (!error) {
+        const char* message = response["message"] | "Bonus not available";
+        Serial.printf("Bonus refused: %s\n", message);
+        setDisplay(String(message), false);
+      } else {
+        Serial.printf("Bonus response parse failed: %s\n", error.c_str());
+        setDisplay("SERVER XATOSI", false);
+      }
+      http.end();
+      return;
+    }
+
+    Serial.printf("Bonus request failed: HTTP %d (attempt %u)\n", status, attempt + 1);
+    http.end();
+    // 4xx javobni takrorlash foydasiz (masalan, faol bonus yo'q).
+    if (status >= 400 && status < 500) {
+      setDisplay("MUKOFOT YO'Q", false);
+      return;
+    }
+    delay(400U * (attempt + 1));
   }
-  http.end();
+  Serial.println("Bonus request failed after retries; no physical impulses emitted");
+  setDisplay("ALOQA YO'Q", false);
 }
 
 void IRAM_ATTR onButtonPress() {
@@ -244,10 +268,13 @@ void scrollDisplay() {
 }
 
 void setup() {
-  Serial.begin(115200);
-  pinMode(BUTTON_PIN, INPUT_PULLUP);
+  // Eng birinchi qadam: impuls chizig'ini aniq holatga keltirish.
+  // Quvvat yonganda pin erkin qolsa, bill acceptor soxta impuls ko'rishi mumkin.
   pinMode(PULSE_OUTPUT_PIN, OUTPUT);
   setPulseIdle();
+
+  Serial.begin(115200);
+  pinMode(BUTTON_PIN, INPUT_PULLUP);
   attachInterrupt(digitalPinToInterrupt(BUTTON_PIN), onButtonPress, FALLING);
   WiFi.mode(WIFI_STA);
 

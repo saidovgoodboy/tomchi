@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 
 type TabKey = 'dashboard' | 'cars' | 'visits' | 'bonus' | 'cameras';
 type PulsePolarity = 'HIGH' | 'LOW';
@@ -7,6 +7,7 @@ type Language = 'uz' | 'ru';
 type Theme = 'dark' | 'light';
 
 const PULSE_FREQUENCIES_MS: PulseFrequencyMs[] = [50, 100, 200];
+const PLATE_RE = /^(?:\d{2}[A-Z]\d{3}[A-Z]{2}|\d{5}[A-Z]{3})$/;
 const copy = {
   uz: {
     subtitle: 'Avtomoyka bonus tizimi',
@@ -38,6 +39,21 @@ const copy = {
     bonusPaid: 'Berilgan bonus',
     activeBonus: 'Faol bonuslar',
     manualDetection: 'Raqamni qo‘lda kiritish',
+    detectConfirm: 'Kelishni ro‘yxatga olasizmi?',
+    invalidPlate: 'Raqam formati noto‘g‘ri (masalan 01A123BC yoki 12345ABC)',
+    invalidNumber: 'Bonus qiymatlari butun son bo‘lishi kerak',
+    requestFailed: 'So‘rov bajarilmadi',
+    sessionExpired: 'Sessiya muddati tugadi, qaytadan kiring',
+    settingsNotLoaded: 'Sozlamalar yuklanmadi — saqlash bloklangan',
+    confirmFinishTest: 'Test rejimini tugatasizmi?',
+    confirmAddBox: 'Yangi box qo‘shilsinmi?',
+    confirmRefund: 'Bu impulsni qaytarasizmi?',
+    refund: 'Qaytarish',
+    refunded: 'Qaytarilgan',
+    pulseHistory: 'So‘nggi impulslar',
+    noPulses: 'Hozircha impuls yo‘q',
+    boxIdRequired: 'Box ID va nomi kiritilishi shart',
+    loadFailed: 'Ma’lumot yuklanmadi',
     detect: 'Aniqlash',
     systemStatus: 'Tizim holati',
     ocrReady: 'Mahalliy OCR faol',
@@ -63,6 +79,7 @@ const copy = {
     bonusLeft: 'Qolgan bonus',
     status: 'Holati',
     actions: 'Amallar',
+    date: 'Sana',
     active: 'Faol',
     idle: 'Faol emas',
     save: 'Saqlash',
@@ -160,6 +177,21 @@ const copy = {
     bonusPaid: 'Выдано бонусов',
     activeBonus: 'Активные бонусы',
     manualDetection: 'Ввести номер вручную',
+    detectConfirm: 'Зарегистрировать визит?',
+    invalidPlate: 'Неверный формат номера (например 01A123BC или 12345ABC)',
+    invalidNumber: 'Значения бонуса должны быть целыми числами',
+    requestFailed: 'Запрос не выполнен',
+    sessionExpired: 'Сессия истекла, войдите заново',
+    settingsNotLoaded: 'Настройки не загружены — сохранение заблокировано',
+    confirmFinishTest: 'Завершить тестовый режим?',
+    confirmAddBox: 'Добавить новый бокс?',
+    confirmRefund: 'Вернуть этот импульс?',
+    refund: 'Вернуть',
+    refunded: 'Возвращён',
+    pulseHistory: 'Последние импульсы',
+    noPulses: 'Импульсов пока нет',
+    boxIdRequired: 'Укажите ID и имя бокса',
+    loadFailed: 'Не удалось загрузить данные',
     detect: 'Распознать',
     systemStatus: 'Состояние системы',
     ocrReady: 'Локальный OCR активен',
@@ -185,6 +217,7 @@ const copy = {
     bonusLeft: 'Остаток бонуса',
     status: 'Статус',
     actions: 'Действия',
+    date: 'Дата',
     active: 'Активен',
     idle: 'Неактивен',
     save: 'Сохранить',
@@ -338,6 +371,16 @@ type DetectionRow = {
   image_url: string;
 };
 
+type PulseRow = {
+  id: number;
+  visit_id: number;
+  box_id: string;
+  plate: string;
+  amount: number;
+  created_at: string;
+  refunded_at: string | null;
+};
+
 const API_BASE = import.meta.env.VITE_API_BASE
   ?? (import.meta.env.DEV ? `http://${window.location.hostname}:8000` : '');
 
@@ -347,12 +390,14 @@ function AuthenticatedImage({
   token,
   t,
   refreshMs = 0,
+  onUnauthorized,
 }: {
   url: string;
   alt: string;
   token: string;
   t: Translate;
   refreshMs?: number;
+  onUnauthorized?: () => void;
 }) {
   const [source, setSource] = useState('');
   const [failed, setFailed] = useState(false);
@@ -365,6 +410,10 @@ function AuthenticatedImage({
     const fetchImage = async () => {
       try {
         const response = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+        if (response.status === 401) {
+          onUnauthorized?.();
+          return;
+        }
         if (!response.ok) throw new Error(`Image request failed: ${response.status}`);
         const blob = await response.blob();
         if (!active) return;
@@ -388,7 +437,7 @@ function AuthenticatedImage({
       window.clearTimeout(timer);
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, [url, refreshMs, token]);
+  }, [url, refreshMs, token, onUnauthorized]);
 
   if (!source) {
     return (
@@ -407,6 +456,7 @@ function AuthenticatedImage({
 
 function DetectionReviewCard({
   detection,
+  onUnauthorized,
   token,
   language,
   t,
@@ -416,6 +466,7 @@ function DetectionReviewCard({
   token: string;
   language: Language;
   t: Translate;
+  onUnauthorized?: () => void;
   onSave: (id: number, plate: string) => Promise<void>;
 }) {
   const [plate, setPlate] = useState(detection.plate ?? '');
@@ -443,6 +494,7 @@ function DetectionReviewCard({
         alt={`${t('detection')} ${detection.id}`}
         token={token}
         t={t}
+        onUnauthorized={onUnauthorized}
       />
       <div className="detection-details">
         <div className="detection-meta">
@@ -504,8 +556,9 @@ export default function App() {
     bonus_per_press?: number;
     anpr_enabled?: boolean;
     anpr_available?: boolean;
+    database_ok?: boolean;
   } | null>(null);
-  const [plate, setPlate] = useState('01A123BC');
+  const [plate, setPlate] = useState('');
   const [message, setMessage] = useState('');
   const [editingVisitId, setEditingVisitId] = useState<number | null>(null);
   const [editingVisitPlate, setEditingVisitPlate] = useState('');
@@ -529,9 +582,21 @@ export default function App() {
   const [pendingTestAmount, setPendingTestAmount] = useState<number | null>(null);
   const [newBoxId, setNewBoxId] = useState('');
   const [newBoxName, setNewBoxName] = useState('');
+  const [detecting, setDetecting] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+  const [savingVisitId, setSavingVisitId] = useState<number | null>(null);
+  const [addingBox, setAddingBox] = useState(false);
+  const [finishingTest, setFinishingTest] = useState(false);
+  const [settingsReady, setSettingsReady] = useState(false);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [pulses, setPulses] = useState<PulseRow[]>([]);
+  const [refundingId, setRefundingId] = useState<number | null>(null);
+  const activeBoxRef = useRef(activeBoxId);
+  activeBoxRef.current = activeBoxId;
 
   const t: Translate = (key) => copy[language][key];
-  const formatNumber = (value: number) => value.toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU');
+  const formatNumber = (value: number) =>
+    Number.isFinite(value) ? value.toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU') : '0';
   const selectedBoxName = boxes.find((box) => box.id === activeBoxId)?.name ?? activeBoxId;
   const pageTitleKeys: Record<TabKey, CopyKey> = {
     dashboard: 'adminPanel',
@@ -558,69 +623,137 @@ export default function App() {
     return () => window.removeEventListener('keydown', closeOnEscape);
   }, [selectedVisitPhoto]);
 
+  const handleUnauthorized = useCallback(() => {
+    sessionStorage.removeItem('tomchi-admin-token');
+    setAuthToken('');
+    setSessionExpired(true);
+  }, []);
+
   const apiFetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
     const headers = new Headers(init.headers);
     if (authToken) headers.set('Authorization', `Bearer ${authToken}`);
     const response = await fetch(input, { ...init, headers });
     if (response.status === 401 && authToken) {
-      sessionStorage.removeItem('tomchi-admin-token');
-      setAuthToken('');
+      handleUnauthorized();
     }
     return response;
   };
 
-  const loadData = async () => {
-    if (!authToken) return;
-    try {
-      const [statsRes, visitsRes, carsRes, healthRes, boxesRes] = await Promise.all([
-        apiFetch(`${API_BASE}/api/stats`),
-        apiFetch(`${API_BASE}/api/visits?limit=10&box_id=${encodeURIComponent(activeBoxId)}`),
-        apiFetch(`${API_BASE}/api/cars?limit=10`),
-        fetch(`${API_BASE}/health`),
-        apiFetch(`${API_BASE}/api/boxes`),
-      ]);
-
-      if (statsRes.ok) setStats(await statsRes.json());
-      if (visitsRes.ok) setVisits(await visitsRes.json());
-      if (carsRes.ok) setCars(await carsRes.json());
-      if (healthRes.ok) setHealth(await healthRes.json());
-      if (boxesRes.ok) {
-        const boxData: BoxRow[] = await boxesRes.json();
-        setBoxes(boxData);
-        if (!boxData.some((box) => box.id === activeBoxId) && boxData.length) {
-          setActiveBoxId(boxData[0].id);
-        }
+  // Barcha API xatolarini bir xil, tushunarli ko'rinishga keltiradi:
+  // FastAPI `detail` ba'zan matn, ba'zan massiv bo'ladi; proxy 502 HTML qaytaradi.
+  const request = async <T,>(path: string, init: RequestInit = {}): Promise<T> => {
+    const response = await apiFetch(path, init);
+    const text = await response.text();
+    let body: unknown = null;
+    if (text) {
+      try {
+        body = JSON.parse(text);
+      } catch {
+        body = null;
       }
+    }
+    if (!response.ok) {
+      const detail = (body as { detail?: unknown } | null)?.detail;
+      let detailText = '';
+      if (typeof detail === 'string') {
+        detailText = detail;
+      } else if (Array.isArray(detail)) {
+        detailText = detail
+          .map((item) => (item as { msg?: string })?.msg ?? '')
+          .filter(Boolean)
+          .join('; ');
+      }
+      throw new Error(detailText || `${t('requestFailed')} (${response.status})`);
+    }
+    return body as T;
+  };
+
+  const loadData = async (): Promise<boolean> => {
+    if (!authToken) return false;
+    const boxAtStart = activeBoxId;
+    try {
+      const [statsData, visitsData, carsData, healthData, boxesData] = await Promise.all([
+        request<Stats>('/api/stats'),
+        request<VisitRow[]>(`/api/visits?limit=10&box_id=${encodeURIComponent(activeBoxId)}`),
+        request<CarRow[]>('/api/cars?limit=10'),
+        request<{ ok: boolean; anpr_enabled?: boolean; anpr_available?: boolean }>('/health'),
+        request<BoxRow[]>('/api/boxes'),
+      ]);
+      setStats(statsData);
+      setVisits(visitsData);
+      setCars(carsData);
+      // Box almashgan bo'lsa, eski box javobi yangi holatni bosib ketmasin.
+      if (activeBoxRef.current !== boxAtStart) return false;
+      setHealth(healthData);
+      setBoxes(boxesData);
+      if (boxesData.length && !boxesData.some((box) => box.id === activeBoxId)) {
+        setActiveBoxId(boxesData[0].id);
+      }
+      return true;
     } catch (error) {
       console.error('loadData failed', error);
       setHealth({ ok: false, service: 'tomchi-backend' });
+      return false;
     }
   };
 
   useEffect(() => {
     if (!authToken) return;
-    loadData();
-    const id = window.setInterval(loadData, 10000);
-    return () => window.clearInterval(id);
+    let inFlight = false;
+    let failures = 0;
+    let timer = 0;
+
+    const tick = async () => {
+      window.clearTimeout(timer);
+      if (document.visibilityState !== 'visible' || navigator.onLine === false) {
+        timer = window.setTimeout(tick, 10000);
+        return;
+      }
+      if (inFlight) return;
+      inFlight = true;
+      let ok = false;
+      try {
+        ok = await loadData();
+      } finally {
+        inFlight = false;
+      }
+      failures = ok ? 0 : Math.min(6, failures + 1);
+      // Xatolikda backoff: 10s -> 20s -> 40s (maksimum 60s).
+      timer = window.setTimeout(tick, Math.min(60000, 10000 * 2 ** Math.max(0, failures - 1)));
+    };
+
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void tick();
+    };
+
+    void tick();
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, [activeBoxId, authToken]);
 
   useEffect(() => {
     if (!authToken || activeTab !== 'cameras') return;
     let active = true;
+    let inFlight = false;
     const loadDetections = async () => {
+      if (inFlight || document.visibilityState !== 'visible') return;
+      inFlight = true;
       try {
-        const response = await apiFetch(
-          `${API_BASE}/api/detections?limit=30&box_id=${encodeURIComponent(activeBoxId)}`,
+        const data = await request<DetectionRow[]>(
+          `/api/detections?limit=30&box_id=${encodeURIComponent(activeBoxId)}`,
         );
-        if (!response.ok) throw new Error(`${t('settingsLoadFailed')}: ${response.status}`);
-        const data: DetectionRow[] = await response.json();
         if (active) setDetections(data);
       } catch (error) {
-        if (active) setMessage(error instanceof Error ? error.message : t('settingsLoadFailed'));
+        if (active) setMessage(error instanceof Error ? error.message : t('loadFailed'));
+      } finally {
+        inFlight = false;
       }
     };
 
-    loadDetections();
+    void loadDetections();
     const timer = window.setInterval(loadDetections, 10000);
     return () => {
       active = false;
@@ -631,11 +764,20 @@ export default function App() {
   useEffect(() => {
     if (!authToken) return;
     let active = true;
-    apiFetch(`${API_BASE}/api/settings?box_id=${encodeURIComponent(activeBoxId)}`)
-      .then(async (res) => {
-        if (!res.ok) throw new Error(t('settingsLoadFailed'));
-        return res.json();
-      })
+    setSettingsReady(false);
+    request<{
+      bonus_amount: number;
+      bonus_per_press: number;
+      bonus_every_visits: number;
+      pulse_polarity: PulsePolarity;
+      pulse_frequency_ms: PulseFrequencyMs;
+      display_idle_text: string;
+      display_visit_label: string;
+      display_reward_label: string;
+      display_remaining_label: string;
+      display_finished_text: string;
+      display_currency_label: string;
+    }>(`/api/settings?box_id=${encodeURIComponent(activeBoxId)}`)
       .then((data) => {
         if (!active) return;
         setBonusAmount(data.bonus_amount);
@@ -649,9 +791,11 @@ export default function App() {
         setDisplayRemainingLabel(data.display_remaining_label);
         setDisplayFinishedText(data.display_finished_text);
         setDisplayCurrencyLabel(data.display_currency_label);
+        setSettingsReady(true);
       })
       .catch((error) => {
-        if (active) console.error(error);
+        if (!active) return;
+        setMessage(error instanceof Error ? error.message : t('settingsLoadFailed'));
       });
     return () => {
       active = false;
@@ -659,15 +803,14 @@ export default function App() {
   }, [activeBoxId, authToken]);
 
   useEffect(() => {
-    if (!authToken) return;
+    if (!authToken || activeTab !== 'bonus') return;
     let active = true;
     const loadTestStatus = async () => {
+      if (document.visibilityState !== 'visible') return;
       try {
-        const response = await apiFetch(
-          `${API_BASE}/api/boxes/${encodeURIComponent(activeBoxId)}/test`,
+        const data = await request<{ active: boolean; pending_amount: number | null }>(
+          `/api/boxes/${encodeURIComponent(activeBoxId)}/test`,
         );
-        if (!response.ok) throw new Error(`${t('settingsLoadFailed')}: ${response.status}`);
-        const data = await response.json();
         if (active) {
           setBoxTestActive(data.active);
           setPendingTestAmount(data.pending_amount);
@@ -677,13 +820,32 @@ export default function App() {
       }
     };
 
-    loadTestStatus();
+    void loadTestStatus();
     const interval = window.setInterval(loadTestStatus, 2000);
     return () => {
       active = false;
       window.clearInterval(interval);
     };
-  }, [activeBoxId, authToken]);
+  }, [activeTab, activeBoxId, authToken]);
+
+  useEffect(() => {
+    if (!authToken || activeTab !== 'bonus') return;
+    let active = true;
+    const loadPulses = async () => {
+      try {
+        const data = await request<PulseRow[]>(
+          `/api/pulses?limit=20&box_id=${encodeURIComponent(activeBoxId)}`,
+        );
+        if (active) setPulses(data);
+      } catch (error) {
+        if (active) console.error(error);
+      }
+    };
+    void loadPulses();
+    return () => {
+      active = false;
+    };
+  }, [activeTab, activeBoxId, authToken]);
 
   useEffect(() => {
     if (!message) return;
@@ -691,79 +853,108 @@ export default function App() {
     return () => window.clearTimeout(timeout);
   }, [message]);
 
+  useEffect(() => {
+    // Box almashganda oldingi box ma'lumotlari ko'rinib qolmasin.
+    setVisits([]);
+    setDetections([]);
+    setPulses([]);
+    setEditingVisitId(null);
+    setEditingVisitPlate('');
+  }, [activeBoxId]);
+
   const handleDetect = async () => {
+    const normalized = plate.trim().toUpperCase();
+    if (!PLATE_RE.test(normalized)) {
+      setMessage(t('invalidPlate'));
+      return;
+    }
+    if (!window.confirm(`${t('detectConfirm')} ${normalized}`)) return;
+    if (detecting) return;
+
+    setDetecting(true);
     try {
-      const res = await apiFetch(`${API_BASE}/api/detect`, {
+      const data = await request<{ ok: boolean; plate: string; visit_no: number }>('/api/detect', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'X-Box-Id': activeBoxId,
         },
-        body: JSON.stringify({ plate }),
+        body: JSON.stringify({ plate: normalized }),
       });
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail ?? t('unexpectedError'));
-      }
-
       setMessage(`${t('visitRegistered')}: ${data.plate} / #${data.visit_no}`);
+      setPlate('');
       await loadData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('unexpectedError'));
+    } finally {
+      setDetecting(false);
     }
   };
 
   const handleSaveVisitPlate = async (visitId: number) => {
+    const normalized = editingVisitPlate.trim().toUpperCase();
+    if (!PLATE_RE.test(normalized)) {
+      setMessage(t('invalidPlate'));
+      return;
+    }
+    if (savingVisitId !== null) return;
+
+    setSavingVisitId(visitId);
     try {
-      const response = await apiFetch(`${API_BASE}/api/visits/${visitId}/plate`, {
+      const data = await request<{ plate: string }>(`/api/visits/${visitId}/plate`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ plate: editingVisitPlate }),
+        body: JSON.stringify({ plate: normalized }),
       });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? t('unexpectedError'));
       setEditingVisitId(null);
       setEditingVisitPlate('');
       setMessage(`${t('visit')} #${visitId}: ${data.plate}`);
       await loadData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('unexpectedError'));
+    } finally {
+      setSavingVisitId(null);
     }
   };
 
   const handleSaveSettings = async () => {
+    if (!settingsReady || savingSettings) return;
+    if (!Number.isInteger(bonusAmount) || !Number.isInteger(bonusPerPress) || !Number.isInteger(bonusEveryVisits)) {
+      setMessage(t('invalidNumber'));
+      return;
+    }
+    setSavingSettings(true);
     try {
-      const res = await apiFetch(
-        `${API_BASE}/api/settings?box_id=${encodeURIComponent(activeBoxId)}`,
-        {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            bonus_amount: bonusAmount,
-            bonus_per_press: bonusPerPress,
-            bonus_every_visits: bonusEveryVisits,
-            pulse_polarity: pulsePolarity,
-            pulse_frequency_ms: pulseFrequencyMs,
-            display_idle_text: displayIdleText,
-            display_visit_label: displayVisitLabel,
-            display_reward_label: displayRewardLabel,
-            display_remaining_label: displayRemainingLabel,
-            display_finished_text: displayFinishedText,
-            display_currency_label: displayCurrencyLabel,
-          }),
+      const data = await request<{
+        pulse_polarity: string;
+        pulse_frequency_ms: number;
+        display_idle_text: string;
+        display_visit_label: string;
+        display_reward_label: string;
+        display_remaining_label: string;
+        display_finished_text: string;
+        display_currency_label: string;
+      }>(`/api/settings?box_id=${encodeURIComponent(activeBoxId)}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
         },
-      );
-
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail ?? t('settingsLoadFailed'));
-      }
-
+        body: JSON.stringify({
+          bonus_amount: bonusAmount,
+          bonus_per_press: bonusPerPress,
+          bonus_every_visits: bonusEveryVisits,
+          pulse_polarity: pulsePolarity,
+          pulse_frequency_ms: pulseFrequencyMs,
+          display_idle_text: displayIdleText,
+          display_visit_label: displayVisitLabel,
+          display_reward_label: displayRewardLabel,
+          display_remaining_label: displayRemainingLabel,
+          display_finished_text: displayFinishedText,
+          display_currency_label: displayCurrencyLabel,
+        }),
+      });
       setDisplayIdleText(data.display_idle_text);
       setDisplayVisitLabel(data.display_visit_label);
       setDisplayRewardLabel(data.display_reward_label);
@@ -776,17 +967,17 @@ export default function App() {
       await loadData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('unexpectedError'));
+    } finally {
+      setSavingSettings(false);
     }
   };
 
   const handleStartBoxTest = async () => {
     try {
-      const response = await apiFetch(
-        `${API_BASE}/api/boxes/${encodeURIComponent(activeBoxId)}/test/start`,
+      const data = await request<{ active: boolean; pending_amount: number | null }>(
+        `/api/boxes/${encodeURIComponent(activeBoxId)}/test/start`,
         { method: 'POST' },
       );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? t('unexpectedError'));
       setBoxTestActive(data.active);
       setPendingTestAmount(data.pending_amount);
       setMessage(`${selectedBoxName}: ${t('testStarted')}`);
@@ -797,16 +988,14 @@ export default function App() {
 
   const handleSendTestBonus = async () => {
     try {
-      const response = await apiFetch(
-        `${API_BASE}/api/boxes/${encodeURIComponent(activeBoxId)}/test/pulses`,
+      const data = await request<{ pending_amount: number | null }>(
+        `/api/boxes/${encodeURIComponent(activeBoxId)}/test/pulses`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ amount: testBonusAmount }),
         },
       );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? t('unexpectedError'));
       setPendingTestAmount(data.pending_amount);
       setMessage(`${selectedBoxName}: ${t('testQueued')}`);
     } catch (error) {
@@ -815,59 +1004,90 @@ export default function App() {
   };
 
   const handleFinishBoxTest = async () => {
+    if (finishingTest) return;
+    if (!window.confirm(`${t('confirmFinishTest')} (${selectedBoxName})`)) return;
+    setFinishingTest(true);
     try {
-      const response = await apiFetch(
-        `${API_BASE}/api/boxes/${encodeURIComponent(activeBoxId)}/test/finish`,
+      const data = await request<{ active: boolean; pending_amount: number | null }>(
+        `/api/boxes/${encodeURIComponent(activeBoxId)}/test/finish`,
         { method: 'POST' },
       );
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? t('unexpectedError'));
       setBoxTestActive(data.active);
       setPendingTestAmount(data.pending_amount);
       setMessage(`${selectedBoxName}: ${t('testFinished')}`);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('unexpectedError'));
+    } finally {
+      setFinishingTest(false);
     }
   };
 
   const handleCreateBox = async () => {
+    const boxId = newBoxId.trim();
+    const boxName = newBoxName.trim();
+    if (!boxId || !boxName) {
+      setMessage(t('boxIdRequired'));
+      return;
+    }
+    if (addingBox) return;
+    if (!window.confirm(`${t('confirmAddBox')} ${boxId} / ${boxName}`)) return;
+
+    setAddingBox(true);
     try {
-      const res = await apiFetch(`${API_BASE}/api/boxes`, {
+      const data = await request<{ id: string; name: string }>('/api/boxes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: newBoxId, name: newBoxName }),
+        body: JSON.stringify({ id: boxId, name: boxName }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.detail ?? t('unexpectedError'));
       setNewBoxId('');
       setNewBoxName('');
       setMessage(`${t('addWashBox')}: ${data.name} (${data.id})`);
       await loadData();
     } catch (error) {
       setMessage(error instanceof Error ? error.message : t('unexpectedError'));
+    } finally {
+      setAddingBox(false);
+    }
+  };
+
+  const handleRefundPulse = async (pulseId: number) => {
+    if (refundingId !== null) return;
+    if (!window.confirm(t('confirmRefund'))) return;
+    setRefundingId(pulseId);
+    try {
+      await request(`/api/pulses/${pulseId}/refund`, { method: 'POST' });
+      const refreshed = await request<PulseRow[]>(
+        `/api/pulses?limit=20&box_id=${encodeURIComponent(activeBoxId)}`,
+      );
+      setPulses(refreshed);
+      setMessage(t('refunded'));
+      await loadData();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : t('unexpectedError'));
+    } finally {
+      setRefundingId(null);
     }
   };
 
   const handleCorrectPlate = async (detectionId: number, correctedPlate: string) => {
     try {
-      const response = await apiFetch(`${API_BASE}/api/detections/${detectionId}/plate`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
+      const data = await request<{ plate: string; visit_no: number }>(
+        `/api/detections/${detectionId}/plate`,
+        {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ plate: correctedPlate }),
         },
-        body: JSON.stringify({ plate: correctedPlate }),
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? t('unexpectedError'));
-      setMessage(`${t('visitRegistered')}: ${data.plate} / #${data.visit_no}`);
-      const refreshed = await apiFetch(
-        `${API_BASE}/api/detections?limit=30&box_id=${encodeURIComponent(activeBoxId)}`,
       );
-      if (refreshed.ok) setDetections(await refreshed.json());
+      setMessage(`${t('visitRegistered')}: ${data.plate} / #${data.visit_no}`);
+      setDetections(await request<DetectionRow[]>(
+        `/api/detections?limit=30&box_id=${encodeURIComponent(activeBoxId)}`,
+      ));
       await loadData();
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : t('unexpectedError');
-      setMessage(errorMessage);
+      setMessage(error instanceof Error ? error.message : t('unexpectedError'));
     }
   };
 
@@ -883,8 +1103,12 @@ export default function App() {
       });
       const data = await response.json();
       if (!response.ok) throw new Error(t('loginFailed'));
+      if (typeof data.access_token !== 'string' || !data.access_token) {
+        throw new Error(t('loginFailed'));
+      }
       sessionStorage.setItem('tomchi-admin-token', data.access_token);
       setAuthToken(data.access_token);
+      setSessionExpired(false);
       setLoginPassword('');
     } catch (error) {
       setLoginError(error instanceof Error ? error.message : t('loginFailed'));
@@ -895,8 +1119,20 @@ export default function App() {
 
   const handleLogout = () => {
     sessionStorage.removeItem('tomchi-admin-token');
-    setSelectedVisitPhoto(null);
     setAuthToken('');
+    setSessionExpired(false);
+    setSelectedVisitPhoto(null);
+    setStats(null);
+    setVisits([]);
+    setCars([]);
+    setBoxes([]);
+    setDetections([]);
+    setPulses([]);
+    setHealth(null);
+    setMessage('');
+    setEditingVisitId(null);
+    setEditingVisitPlate('');
+    setSettingsReady(false);
   };
 
   const renderDashboard = () => (
@@ -929,7 +1165,9 @@ export default function App() {
               onChange={(event) => setPlate(event.target.value.toUpperCase())}
               placeholder={t('manualPlatePlaceholder')}
             />
-            <button type="button" onClick={handleDetect}>{t('detect')}</button>
+            <button type="button" onClick={handleDetect} disabled={detecting}>
+              {detecting ? t('saving') : t('detect')}
+            </button>
           </div>
         </div>
 
@@ -1021,6 +1259,7 @@ export default function App() {
                       alt={`${t('visitImage')} ${visit.plate}`}
                       token={authToken}
                       t={t}
+                      onUnauthorized={handleUnauthorized}
                     />
                   </button>
                 ) : (
@@ -1037,8 +1276,12 @@ export default function App() {
               <td className="table-actions">
                 {editingVisitId === visit.id ? (
                   <>
-                    <button className="table-action primary-action" onClick={() => handleSaveVisitPlate(visit.id)}>
-                      {t('save')}
+                    <button
+                      className="table-action primary-action"
+                      onClick={() => handleSaveVisitPlate(visit.id)}
+                      disabled={savingVisitId === visit.id}
+                    >
+                      {savingVisitId === visit.id ? t('saving') : t('save')}
                     </button>
                     <button
                       className="table-action"
@@ -1089,6 +1332,7 @@ export default function App() {
               token={authToken}
               t={t}
               refreshMs={1500}
+              onUnauthorized={handleUnauthorized}
             />
             <p className="camera-current">
               {box.current_plate ? `${t('lastCar')}: ${box.current_plate}` : t('noVisitYet')}
@@ -1114,6 +1358,7 @@ export default function App() {
               token={authToken}
               language={language}
               t={t}
+              onUnauthorized={handleUnauthorized}
               onSave={handleCorrectPlate}
             />
           ))}
@@ -1265,7 +1510,15 @@ export default function App() {
           </label>
         </div>
         <p className="settings-hint">{t('displayAsciiHint')}</p>
-        <button className="save-button" onClick={handleSaveSettings}>{t('save')}</button>
+        <button
+          className="save-button"
+          onClick={handleSaveSettings}
+          disabled={!settingsReady || savingSettings}
+          title={settingsReady ? undefined : t('settingsNotLoaded')}
+        >
+          {savingSettings ? t('saving') : t('save')}
+        </button>
+        {!settingsReady && <p className="settings-hint">{t('settingsNotLoaded')}</p>}
       </div>
       <div className="panel">
         <h3>{t('boxPulseTest')}: {selectedBoxName}</h3>
@@ -1297,13 +1550,59 @@ export default function App() {
               >
                 {t('sendTestBonus')}
               </button>
-              <button className="save-button finish-test-button" onClick={handleFinishBoxTest}>
-                {t('finishTesting')}
+              <button
+                className="save-button finish-test-button"
+                onClick={handleFinishBoxTest}
+                disabled={finishingTest}
+              >
+                {finishingTest ? t('saving') : t('finishTesting')}
               </button>
             </div>
           </>
         )}
       </div>
+      <div className="panel">
+        <h3>{t('pulseHistory')}</h3>
+        {pulses.length === 0 ? (
+          <p className="settings-hint">{t('noPulses')}</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="visits-table">
+              <thead>
+                <tr>
+                  <th>{t('plateNumber')}</th>
+                  <th>{t('bonus')}</th>
+                  <th>{t('date')}</th>
+                  <th>{t('actions')}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pulses.map((pulse) => (
+                  <tr key={pulse.id}>
+                    <td>{pulse.plate}</td>
+                    <td>{formatNumber(pulse.amount)}</td>
+                    <td>{new Date(pulse.created_at).toLocaleString(language === 'uz' ? 'uz-UZ' : 'ru-RU')}</td>
+                    <td className="table-actions">
+                      {pulse.refunded_at ? (
+                        <span className="confirmed-status">{t('refunded')}</span>
+                      ) : (
+                        <button
+                          className="table-action"
+                          onClick={() => handleRefundPulse(pulse.id)}
+                          disabled={refundingId !== null}
+                        >
+                          {refundingId === pulse.id ? t('saving') : t('refund')}
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       <div className="panel">
         <h3>{t('addWashBox')}</h3>
         <div className="settings-grid">
@@ -1316,7 +1615,9 @@ export default function App() {
             <input value={newBoxName} onChange={(event) => setNewBoxName(event.target.value)} placeholder="Box 2" />
           </label>
         </div>
-        <button className="save-button" onClick={handleCreateBox}>{t('addWashBox')}</button>
+        <button className="save-button" onClick={handleCreateBox} disabled={addingBox}>
+          {addingBox ? t('saving') : t('addWashBox')}
+        </button>
       </div>
     </section>
   );
@@ -1360,6 +1661,7 @@ export default function App() {
               required
             />
           </label>
+          {sessionExpired && !loginError && <p role="alert">{t('sessionExpired')}</p>}
           {loginError && <p role="alert">{loginError}</p>}
           <button type="submit" disabled={loginPending}>
             {loginPending ? t('signingIn') : t('signIn')}
@@ -1459,6 +1761,7 @@ export default function App() {
               alt={`${t('visitImage')} ${selectedVisitPhoto.plate}`}
               token={authToken}
               t={t}
+              onUnauthorized={handleUnauthorized}
             />
           </section>
         </div>

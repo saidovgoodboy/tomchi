@@ -1,0 +1,11 @@
+[Unit]
+Description=Tomchi ma'lumotlar bazasi va rasmlar zaxirasi
+Documentation=file:/home/saidov/tomchi/README.md
+
+[Service]
+Type=oneshot
+User=saidov
+WorkingDirectory=/home/saidov/tomchi
+ExecStart=/usr/bin/python3 /home/saidov/tomchi/deploy/backup_tomchi.py --dest /home/saidov/tomchi-backups --keep 14
+Nice=10
+IOSchedulingClass=idle

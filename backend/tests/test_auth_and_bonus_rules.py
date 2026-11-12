@@ -710,6 +710,92 @@ class AuthAndBonusRulesTests(unittest.TestCase):
         finally:
             db.close()
 
+    def _seed_active_bonus(self, plate: str = "01A123BC") -> int:
+        db = self.session_factory()
+        try:
+            box = WashBox(id="box-1", name="Box 1")
+            car = Car(plate=plate)
+            db.add_all([box, car])
+            db.flush()
+            visit = Visit(
+                car_id=car.id,
+                box_id=box.id,
+                visit_no=10,
+                bonus_total=20_000,
+                bonus_left=20_000,
+                is_active_bonus=1,
+            )
+            db.add(visit)
+            db.commit()
+            return visit.id
+        finally:
+            db.close()
+
+    def test_visit_timestamp_is_utc_with_z_suffix(self):
+        self._seed_active_bonus()
+        login = self.client.post(
+            "/api/auth/login",
+            json={"username": "admin-test", "password": "test-password"},
+        )
+        response = self.client.get(
+            "/api/visits?box_id=box-1",
+            headers={"Authorization": f"Bearer {login.json()['access_token']}"},
+        )
+        self.assertEqual(response.status_code, 200)
+        created_at = response.json()[0]["created_at"]
+        self.assertTrue(created_at.endswith("Z"), created_at)
+        parsed = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        self.assertEqual(parsed.utcoffset(), timedelta(0))
+
+    def test_bonus_press_is_idempotent_for_same_press_id(self):
+        self._seed_active_bonus()
+        headers = {"X-Device-Key": "hardware-test-key", "X-Box-Id": "box-1"}
+        first = self.client.post("/api/bonus/press", json={"press_id": "press-abc-1"}, headers=headers)
+        second = self.client.post("/api/bonus/press", json={"press_id": "press-abc-1"}, headers=headers)
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertTrue(first.json()["ok"])
+        self.assertFalse(first.json()["duplicate"])
+        self.assertTrue(second.json()["duplicate"])
+        self.assertEqual(first.json()["amount"], second.json()["amount"])
+        self.assertEqual(first.json()["bonus_left"], second.json()["bonus_left"])
+
+        db = self.session_factory()
+        try:
+            self.assertEqual(db.query(BonusPulse).count(), 1)
+        finally:
+            db.close()
+
+    def test_admin_can_refund_a_pulse_once(self):
+        self._seed_active_bonus()
+        headers = {"X-Device-Key": "hardware-test-key", "X-Box-Id": "box-1"}
+        pressed = self.client.post("/api/bonus/press", json={"press_id": "press-refund-1"}, headers=headers)
+        self.assertEqual(pressed.status_code, 200)
+        bonus_after_press = pressed.json()["bonus_left"]
+
+        login = self.client.post(
+            "/api/auth/login",
+            json={"username": "admin-test", "password": "test-password"},
+        )
+        admin_headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+        pulses = self.client.get("/api/pulses?box_id=box-1", headers=admin_headers)
+        self.assertEqual(pulses.status_code, 200)
+        pulse = pulses.json()[0]
+        self.assertEqual(pulse["amount"], 5_000)
+        self.assertIsNone(pulse["refunded_at"])
+
+        refunded = self.client.post(f"/api/pulses/{pulse['id']}/refund", headers=admin_headers)
+        self.assertEqual(refunded.status_code, 200)
+        self.assertEqual(refunded.json()["bonus_left"], bonus_after_press + 5_000)
+
+        again = self.client.post(f"/api/pulses/{pulse['id']}/refund", headers=admin_headers)
+        self.assertEqual(again.status_code, 409)
+
+    def test_health_reports_database_status(self):
+        response = self.client.get("/health")
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["database_ok"])
+
 
 if __name__ == "__main__":
     unittest.main()

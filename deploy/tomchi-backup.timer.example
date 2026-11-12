@@ -1,0 +1,10 @@
+[Unit]
+Description=Tomchi kunlik zaxira nusxasi
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+RandomizedDelaySec=600
+
+[Install]
+WantedBy=timers.target

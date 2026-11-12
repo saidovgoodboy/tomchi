@@ -9,3 +9,6 @@ admin/dist/
 admin/.vite/
 .DS_Store
 .vscode/
+
+*.db-wal
+*.db-shm
