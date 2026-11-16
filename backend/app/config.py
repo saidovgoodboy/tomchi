@@ -26,6 +26,13 @@ class Settings(BaseSettings):
     anpr_tesseract_cmd: str = "tesseract"
     anpr_min_confidence: float = Field(default=0.45, ge=0, le=1)
     anpr_timeout_seconds: int = Field(default=5, ge=1, le=15)
+    # Kadrlar oqimi qaror mashinasi (CaptureSession).
+    anpr_min_frames: int = Field(default=5, ge=2, le=15)
+    anpr_window_size: int = Field(default=5, ge=2, le=15)
+    anpr_agreement_threshold: float = Field(default=0.8, ge=0.5, le=1.0)
+    anpr_max_frames: int = Field(default=15, ge=5, le=60)
+    anpr_max_session_seconds: int = Field(default=20, ge=5, le=120)
+    anpr_no_plate_abort_streak: int = Field(default=5, ge=2, le=15)
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

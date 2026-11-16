@@ -1,6 +1,6 @@
 from app.timeutil import utcnow
 
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 
 from app.db import Base
@@ -89,6 +89,10 @@ class DetectionRecord(Base):
     plate = Column(String(20), nullable=True, index=True)
     ocr_confidence = Column(Float, nullable=True)
     status = Column(String(20), default="pending", nullable=False)
+    frame_candidates = Column(Text, default="[]", nullable=False)
+    auto_confirmed = Column(Integer, default=0, nullable=False)
+    agreement = Column(Float, nullable=True)
+    votes = Column(Integer, nullable=True)
     visit_id = Column(Integer, ForeignKey("visits.id"), nullable=True)
     created_at = Column(DateTime, default=utcnow, nullable=False, index=True)
     updated_at = Column(DateTime, default=utcnow, onupdate=utcnow, nullable=False)

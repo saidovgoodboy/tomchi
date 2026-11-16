@@ -133,5 +133,6 @@ class CaptureSession:
             status="pending",
             plate=top,
             votes=count,
+            agreement=count / len(self.window),
             reason="agreement_not_reached",
         )

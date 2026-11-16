@@ -1,7 +1,9 @@
 from contextlib import asynccontextmanager
 from datetime import date, timedelta
+import json
 import logging
 import time
+from threading import Lock
 from typing import Literal
 from uuid import uuid4
 
@@ -26,6 +28,7 @@ from app.auth import (
     require_admin_token,
     require_device_key,
 )
+from app.capture import CaptureSession, Decision
 from app.config import get_settings
 from app.crud import (
     DEFAULT_DISPLAY_COPY,
@@ -76,6 +79,60 @@ from app.schemas import (
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
+
+
+# Har motion event uchun bitta CaptureSession. Kalit: "<box_id>:<event_id>".
+# Single-process uvicorn uchun yetarli; sessiya tugagach eski yozuvlar tozalanadi.
+_capture_sessions: dict[str, CaptureSession] = {}
+_capture_sessions_lock = Lock()
+
+
+def _session_key(box_id: str, event_id: str) -> str:
+    return f"{box_id}:{event_id}"
+
+
+def _get_or_create_capture_session(box_id: str, event_id: str) -> CaptureSession:
+    key = _session_key(box_id, event_id)
+    now = time.monotonic()
+    with _capture_sessions_lock:
+        session = _capture_sessions.get(key)
+        if session is None:
+            # Eski tugallangan sessiyalarni tozalash (xotira o'sib ketmasin).
+            expiry = now - settings.anpr_max_session_seconds * 3
+            for stale_key, stale in list(_capture_sessions.items()):
+                if stale.finished and stale.started_at < expiry:
+                    _capture_sessions.pop(stale_key, None)
+            session = CaptureSession(
+                event_id=key,
+                min_frames=settings.anpr_min_frames,
+                window_size=settings.anpr_window_size,
+                agreement_threshold=settings.anpr_agreement_threshold,
+                max_frames=settings.anpr_max_frames,
+                max_session_seconds=settings.anpr_max_session_seconds,
+                no_plate_abort_streak=settings.anpr_no_plate_abort_streak,
+            )
+            _capture_sessions[key] = session
+        return session
+
+
+def _apply_capture_decision(db: Session, detection: DetectionRecord, decision: Decision, box_id: str) -> None:
+    """CaptureSession qarorini detection va visitga ko'chiradi."""
+    if decision.status == "finalized" and detection.visit_id is None:
+        result = process_plate_detection(db, decision.plate, box_id)
+        detection.plate = decision.plate
+        detection.visit_id = result["visit_id"]
+        detection.status = "confirmed"
+        detection.auto_confirmed = 1
+    elif decision.status == "aborted" and detection.visit_id is None:
+        detection.status = "aborted"
+    elif decision.status == "pending" and detection.visit_id is None:
+        # Raqam o'qilgan, lekin 80% ga yetmagan — admin tekshirishi uchun qoladi.
+        detection.status = "pending"
+
+    if decision.terminal:
+        detection.agreement = decision.agreement
+        detection.votes = decision.votes
+        detection.updated_at = utcnow()
 
 
 @asynccontextmanager
